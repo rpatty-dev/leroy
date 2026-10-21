@@ -48,12 +48,11 @@ const dim = s => c('120;113;108', s);     // soft soil (#78716c)
 const red = s => c('252;165;165', s);     // berry red (#fca5a5)
 
 const BANNER = `
-${meadow('        🌾  🌸        🌿       🌼       🌷   🌾')}
-${sky('         (\\__/ )')}
-${sky("         (='.'= )")}   ${cream('L E R O Y')}  ${carrot('🥕')}  ${butter('v2.0')}
-${sky('         (")_(" )')}   ${earth('Chill local offline agent in the meadow')}
-${meadow('      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')}
-${dim('       Metal GPU / AVX  •  RTK Compression  •  Ponytail  •  REA')}
+${c('100;116;139', '╭──────────────────────────────────────────────────────────────╮')}
+${c('100;116;139', '│')}  ${sky('(\\__/ )')}  ${cream('L E R O Y')} ${carrot('🥕')} ${butter('v2.0')}  ${dim('•  Autonomous Local AI Agent')}          ${c('100;116;139', '│')}
+${c('100;116;139', '│')}  ${sky("(='.'= )")}  ${meadow('● Metal GPU 40 t/s')}   ${sky('● RTK Compressed')}   ${flower('● REA / Notion')} ${c('100;116;139', '│')}
+${c('100;116;139', '│')}  ${sky('(")_(" )')}  ${earth('Type / for command palette, /clear, /exit')}            ${c('100;116;139', '│')}
+${c('100;116;139', '╰──────────────────────────────────────────────────────────────╯')}
 `;
 
 function parseArgs(argv) {
@@ -1401,9 +1400,15 @@ async function turn(messages, ctx, opts) {
     for (const tc of msg.tool_calls) {
       let args = {}; try { args = JSON.parse(tc.function.arguments || '{}'); } catch {}
       spin(`running ${tc.function.name}...`);
-      console.log(dim(`  🥕 ${tc.function.name}(${Object.values(args).map(v => String(v).slice(0, 40)).join(', ')})`));
+      console.log(`\n${c('100;116;139', '┌─')} ${carrot('⚡ ' + tc.function.name)} ${dim('(' + Object.entries(args).map(([k, v]) => k + '=' + String(v).slice(0, 25)).join(', ') + ')')}`);
       const out = await runTool(tc.function.name, args, ctx);
-      spin('processing output...');
+      spin('evaluating output...');
+      const cleanOut = String(out || '').trim();
+      if (cleanOut) {
+        const preview = cleanOut.split('\n').slice(0, 3).map(l => c('100;116;139', '│ ') + dim(l.slice(0, 75))).join('\n');
+        console.log(preview + (cleanOut.split('\n').length > 3 ? '\n' + c('100;116;139', '│ ') + dim('…') : ''));
+      }
+      console.log(c('100;116;139', '└──────────────────────────────────────────────'));
       messages.push({ role: 'tool', tool_call_id: tc.id, content: out });
     }
   }
