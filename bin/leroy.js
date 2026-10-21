@@ -1037,8 +1037,23 @@ async function turn(messages, ctx, opts) {
     }
     if (!started) stop();
 
+    // Map common model alias hallucinations
+    for (const c of (res.calls || [])) {
+      if (c.name === 'readme') {
+        c.name = 'write_file';
+        let a = {}; try { a = JSON.parse(c.args || '{}'); } catch {}
+        c.args = JSON.stringify({ path: 'README.md', content: a.content || a.text || '' });
+      }
+    }
     // Filter hallucinated tools that do not exist in TOOLS
     const validCalls = (res.calls || []).filter(c => TOOLS.some(t => t.function.name === c.name));
+
+    // If suppressed tool json produced no valid calls, print the text response so user is never left with blank screen
+    if (!validCalls.length && isSuppressedToolJson && res.text) {
+      process.stdout.write(sky('🐇 '));
+      process.stdout.write(res.text);
+      console.log();
+    }
 
     // If tool calls were extracted from jsonMatch, don't echo the raw json as assistant text
     let assistantText = res.text || '';
@@ -1072,7 +1087,7 @@ async function turn(messages, ctx, opts) {
 const SKILL_INSTRUCTIONS = `
 # LEROY EXECUTION DIRECTIVE (CRITICAL)
 - Diagram Design Skill: When asked to create diagrams, charts, or architecture schematics (or redesign README with diagrams), load and follow the 'diagram-design' skill (HTML + SVG self-contained, clean editorial aesthetic, no Mermaid slop, dark/light meadow palette).
-- Readme & Docs Redesign: You have full write access to inspect, redesign, and update README.md, docs, and diagrams directly using 'read_file' and 'write_file'.
+- Readme & File Editing: To create or redesign README.md, ALWAYS call the 'write_file' tool with path: 'README.md' and content: '<full text>'. Never call a non-existent 'readme' tool.
 - Execution-First: You are an autonomous agent with native OS capabilities. When asked to DO something (uninstall/install apps, fix code, inspect system, test endpoints, browse, deploy, manage calendars, send emails), DO NOT output a tutorial, steps, or "you can do X". EXECUTE the appropriate tools immediately, verify the result, and report what was completed.
 - Ponytail: Minimal code. YAGNI. Stdlib & native CLIs first. Surgical edits.
 - Caveman: Concise, terse responses with 100% technical accuracy. No fluff or preamble.
