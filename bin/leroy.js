@@ -394,11 +394,15 @@ function spinner(label) {
 }
 
 async function turn(messages, ctx, opts) {
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+  const isCasual = /^(hi|hello|hey|yo|sup|test|ping|how are you|who are you)[\s!.]*$/i.test(lastUserMsg.trim());
+  const activeTools = isCasual ? [] : TOOLS;
+
   for (let step = 0; step < 8; step++) {
     const stop = spinner(step ? 'nibbling clover…' : 'resting in the meadow…');
     let started = false, res;
     try {
-      res = await completion(messages, TOOLS, t => {
+      res = await completion(messages, activeTools, t => {
         if (!started) { started = true; stop(); process.stdout.write(sky('🐇 ')); }
         process.stdout.write(t);
       });
@@ -410,9 +414,12 @@ async function turn(messages, ctx, opts) {
     if (!started) stop();
     if (res.text) console.log();
 
+    // Filter hallucinated tools that do not exist in TOOLS
+    const validCalls = (res.calls || []).filter(c => TOOLS.some(t => t.function.name === c.name));
+
     const msg = { role: 'assistant', content: res.text || '' };
-    if (res.calls.length) {
-      msg.tool_calls = res.calls.map((c, i) => ({
+    if (validCalls.length) {
+      msg.tool_calls = validCalls.map((c, i) => ({
         id: c.id || `call_${step}_${i}`,
         type: 'function',
         function: { name: c.name, arguments: c.args || '{}' }
@@ -420,7 +427,7 @@ async function turn(messages, ctx, opts) {
     }
     messages.push(msg);
 
-    if (!res.calls.length) return;
+    if (!validCalls.length) return;
 
     for (const tc of msg.tool_calls) {
       let args = {}; try { args = JSON.parse(tc.function.arguments || '{}'); } catch {}
