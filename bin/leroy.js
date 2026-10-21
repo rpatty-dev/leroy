@@ -1668,7 +1668,24 @@ async function runSetup() {
 }
 
 
+
+function runUpdate() {
+  console.log(sky('🐇 Checking and pulling latest updates from GitHub...'));
+  try {
+    const gitDir = path.join(__dirname, '..');
+    const pull = spawnSync('git', ['pull', 'origin', 'master'], { cwd: gitDir, encoding: 'utf8', stdio: 'inherit' });
+    if (pull.status === 0) {
+      console.log(meadow('\n🌾 Leroy updated successfully!'));
+    } else {
+      console.log(red('\n❌ Update failed. Check your git status or network connection.'));
+    }
+  } catch (err) {
+    console.log(red(`\n❌ Error during update: ${err.message}`));
+  }
+}
+
 const SLASH_COMMANDS = [
+  { cmd: '/update', desc: 'Pull latest updates from GitHub' },
   { cmd: '/tree', desc: 'Show visual project tree' },
   { cmd: '/compact', desc: 'Compact prior context to save token window' },
   { cmd: '/model', desc: 'Display active model & switch status' },
@@ -1721,6 +1738,7 @@ function checkVersion() {
 
 async function main() {
   if (process.argv.slice(2)[0] === 'setup') return runSetup();
+  if (process.argv.slice(2)[0] === 'update') return runUpdate();
   const opts = parseArgs(process.argv.slice(2));
   const ver = checkVersion();
   if (opts.version) {
@@ -1758,6 +1776,10 @@ async function main() {
     if (line === '/' || line === '/help') {
       console.log('\n' + meadow('🌾 Available Commands:'));
       SLASH_COMMANDS.forEach(c => console.log(`  ${carrot(c.cmd.padEnd(12))} ${dim(c.desc)}`));
+      return prompt();
+    }
+    if (line === '/update') {
+      runUpdate();
       return prompt();
     }
     if (line === '/exit' || line === '/quit') {
