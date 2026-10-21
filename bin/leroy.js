@@ -10,10 +10,25 @@ const { spawn, spawnSync } = require('child_process');
 
 const PORT = 8080;
 const API = `http://127.0.0.1:${PORT}/v1`;
-const LLM = path.join(os.homedir(), 'Documents', 'LocalLLM');
+const LEROY_DIR = path.join(os.homedir(), '.leroy');
+const LEGACY_LLM = path.join(os.homedir(), 'Documents', 'LocalLLM');
+
+function resolveModelPath(primaryName, fallbackName) {
+  const candidates = [
+    path.join(LEROY_DIR, 'models', primaryName),
+    path.join(LEROY_DIR, 'models', fallbackName),
+    path.join(LEGACY_LLM, 'models', primaryName),
+    path.join(LEGACY_LLM, 'models', fallbackName)
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return candidates[0];
+}
+
 const MODELS = {
-  main: path.join(LLM, 'models', 'LeroyObliterated.Q4_K_M.gguf'),
-  fast: path.join(LLM, 'models', 'Qwen2.5-Coder-3B-abliterated.Q4_K_M.gguf')
+  main: resolveModelPath('LeroyObliterated.gguf', 'LeroyObliterated.Q4_K_M.gguf'),
+  fast: resolveModelPath('Qwen2.5-Coder-3B-Instruct.gguf', 'Qwen2.5-Coder-3B-abliterated.Q4_K_M.gguf')
 };
 const REPOS = path.join(os.homedir(), '.leroy', 'repos');
 const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'target', '__pycache__', '.venv', 'vendor']);
@@ -208,17 +223,40 @@ async function serverUp() {
   }
 }
 
+function findLlamaServer() {
+  // Check PATH first (e.g. Homebrew /opt/homebrew/bin/llama-server or /usr/local/bin)
+  try {
+    const which = spawnSync('which', ['llama-server'], { encoding: 'utf8' });
+    if (which.status === 0 && which.stdout.trim()) {
+      return which.stdout.trim();
+    }
+  } catch {}
+
+  const candidates = [
+    '/opt/homebrew/bin/llama-server',
+    '/usr/local/bin/llama-server',
+    path.join(LEGACY_LLM, 'llama', 'llama-server'),
+    path.join(LEGACY_LLM, 'llama', 'llama-server.exe')
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
 async function ensureServer(opts) {
   if (await serverUp()) return;
   const model = opts.fast ? MODELS.fast : MODELS.main;
-  const exe = path.join(LLM, 'llama', 'llama-server.exe');
-  if (!fs.existsSync(exe) || !fs.existsSync(model)) die(`Missing binary or model:\n  ${exe}\n  ${model}`);
-  
-  console.log(dim(`🥕 Waking up LeroyObliterated (ctx: ${opts.ctx}, IvyBridge AVX optimized)...`));
+  const exe = findLlamaServer();
+  if (!exe) die('Missing llama-server binary. Install via Homebrew: brew install llama.cpp');
+  if (!fs.existsSync(model)) die(`Missing model:\n  ${model}\nDownload directly to ~/.leroy/models/LeroyObliterated.gguf`);
+
+  const isMacArm = process.platform === 'darwin' && (process.arch === 'arm64' || os.cpus()[0]?.model?.includes('Apple'));
+  console.log(dim(`🥕 Waking up LeroyObliterated (ctx: ${opts.ctx}, ${isMacArm ? 'Metal GPU accelerated' : 'CPU optimized'})...`));
+
   const args = [
     '-m', model,
     '--alias', 'LeroyObliterated',
-    '-t', '4',
     '-c', String(opts.ctx),
     '-b', '512',
     '-ub', '256',
@@ -226,6 +264,14 @@ async function ensureServer(opts) {
     '--port', String(PORT),
     '--reasoning-budget', '0'
   ];
+
+  if (isMacArm) {
+    args.push('-ngl', '99'); // Offload all layers to Apple Silicon Metal GPU
+    args.push('-fa', 'on');   // Enable Flash Attention
+  } else {
+    args.push('-t', '4');
+  }
+
   spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
 
   for (let i = 0; i < 40; i++) {
@@ -273,6 +319,25 @@ async function completion(messages, tools, onText) {
       }
     }
   }
+
+  // If the model output markdown or raw JSON tool calls in text content
+  if (!calls.length && text) {
+    const jsonMatch = text.match(/```(?:json)?\s*(\{\s*"name"\s*:\s*"[^"]+".*?\})\s*```/s) ||
+                      text.match(/(\{\s*"name"\s*:\s*"[^"]+",\s*"arguments"\s*:\s*\{.*?\}\s*\})/s);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1]);
+        if (parsed.name && typeof parsed.name === 'string') {
+          calls.push({
+            id: `call_json_${Date.now()}`,
+            name: parsed.name,
+            args: typeof parsed.arguments === 'string' ? parsed.arguments : JSON.stringify(parsed.arguments || {})
+          });
+        }
+      } catch {}
+    }
+  }
+
   return { text, calls: calls.filter(Boolean) };
 }
 
@@ -394,4 +459,8 @@ ${tree(root, 2, 25)}`
   prompt();
 }
 
-if (require.main === module) main().catch(e => die(e.stack || String(e)));
+if (require.main === module) {
+  main().catch(e => die(e.stack || String(e)));
+} else {
+  module.exports = { githubSlug, tree, parseArgs, TOOLS, SKILL_INSTRUCTIONS, MODELS };
+}
