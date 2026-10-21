@@ -180,7 +180,10 @@ const TOOLS = [
   fn('rea', 'Execute REA (Reverse Engineer Anything) tool against a native binary, electron/js app, or directory', {
     command: { type: 'string', enum: REA_SAFE },
     args: { type: 'string', description: 'Arguments like file path or options' }
-  }, ['command'])
+  }, ['command']),
+  fn('read_memory', 'Selectively look up saved user credentials, accounts, or persistent environment notes', {
+    topic: { type: 'string', description: 'Topic or key to query: e.g. "email", "credentials", "accounts", "rules", or "all"' }
+  })
 ];
 
 function grep(root, base, re, hits = [], limit = 30) {
@@ -254,6 +257,10 @@ async function runTool(name, a, ctx) {
     if (name === 'rea') {
       console.log(sky(`  🐰 Inspecting artifact with REA: rea ${a.command} ${a.args || ''}`));
       return runRea(a.command, a.args, root);
+    }
+
+    if (name === 'read_memory') {
+      return querySelectiveMemory(a.topic || 'all');
     }
 
     return `unknown tool ${name}`;
@@ -438,55 +445,56 @@ async function turn(messages, ctx, opts) {
   }
 }
 
-// Built-in Token-Saving & Engineering Skill Prompts
+// Compact persistent skills & disciplines (zero duplicate rules)
 const SKILL_INSTRUCTIONS = `
-# LEROY CORE OPERATING SKILLS & MEADOW DISCIPLINES
-
-## 1. PONYTAIL SKILL (Lazy Senior Dev / Minimum Code)
-- The best code is code never written. Solve the whole problem with the least new code.
-- Reuse Ladder: 
-  1. Does it need to exist at all? (YAGNI)
-  2. Already in this codebase? Reuse existing patterns, types, and helpers.
-  3. Standard library or platform feature? Use it.
-  4. Installed dependency? Use it. Never add a dependency for a few lines.
-  5. Can it be one line? Keep it to one line.
-- Surgical changes only: do not touch adjacent code or refactor what isn't broken.
-- No unrequested scaffolding, no boilerplate for later, no speculative bloat.
-
-## 2. CAVEMAN / RESPONSE DISCIPLINE (Tokless & High Efficiency)
-- Respond concisely. Keep all technical substance, precision, and accuracy.
-- Eliminate conversational filler, pleasantries, preambles, and decorative fluff.
-- Clarity always wins over extreme compression: preserve numbers, code, exact errors, and types.
-
-## 3. TASTE & DESIGN SKILL (Apple / Claude Elite Craft)
-- Strict visual hierarchy, intentional scale, thoughtful whitespace, and calm dark palettes.
-- High-standard micro-interactions and clean data presentation.
-
-## 4. REA SKILL (Reverse Engineer Anything)
-- Use 'rea' to inspect binaries, PE/Mach-O executables, Electron ASARs, and web bundles.
-- Ground all reverse-engineering conclusions in concrete Evidence (offsets, strings, disassembly, imports).
+# LEROY CORE SKILLS
+- Ponytail: Minimal code. YAGNI. Reuse existing patterns. Stdlib first. Surgical changes.
+- Caveman: Concise, fluff-free responses with exact technical accuracy.
+- REA: Use 'rea' tool to analyze binaries, Mach-O/PE/ELF executables, and web bundles.
+- Taste: Calm visual hierarchy, dark palette, intentional layout.
 `;
 
-function loadGlobalMemoryAndRules() {
-  let memoryRules = '';
+const PERSISTENT_SECURITY_RULES = `
+# SECURITY DIRECTIVE
+- NEVER commit personal details, passwords, emails, or credentials to a public repository.
+- Use 'read_memory' tool to selectively query accounts, passwords, or personal credentials when needed.
+`;
+
+function querySelectiveMemory(topic = 'all') {
   const searchPaths = [
+    path.join(os.homedir(), '.leroy', 'MEMORY.md'),
     path.join(os.homedir(), '.gemini', 'config', 'GEMINI.md'),
-    path.join(os.homedir(), '.gemini', 'config', 'AGENTS.md'),
-    path.join(os.homedir(), '.gemini', 'antigravity-cli', 'rules', 'RULES.md'),
-    path.join(os.homedir(), '.leroy', 'MEMORY.md')
+    path.join(os.homedir(), '.gemini', 'config', 'AGENTS.md')
   ];
+
+  const results = [];
+  const t = topic.toLowerCase().trim();
 
   for (const sp of searchPaths) {
     if (fs.existsSync(sp)) {
       try {
-        const c = fs.readFileSync(sp, 'utf8').trim();
-        if (c) {
-          memoryRules += `\n\n### Inherited Memory & Rules (${path.basename(sp)}):\n${c}`;
+        const text = fs.readFileSync(sp, 'utf8');
+        if (t === 'all' || !t) {
+          results.push(`### ${path.basename(sp)}:\n${text}`);
+        } else {
+          // Filter sections matching the topic
+          const sections = text.split(/(?=^#+\s)/m);
+          const matched = sections.filter(sec => sec.toLowerCase().includes(t));
+          if (matched.length) {
+            results.push(`### ${path.basename(sp)} (matched "${topic}"):\n${matched.join('\n').trim()}`);
+          }
         }
       } catch {}
     }
   }
-  return memoryRules;
+
+  return results.length ? results.join('\n\n') : `No memory records found for query "${topic}".`;
+}
+
+function loadGlobalMemoryAndRules() {
+  // Returns only lean, non-duplicate persistent directives.
+  // Full credentials and large memory are kept on disk and retrieved selectively via 'read_memory'.
+  return PERSISTENT_SECURITY_RULES.trim();
 }
 
 async function main() {
@@ -557,5 +565,5 @@ ${tree(root, 2, 25)}`
 if (require.main === module) {
   main().catch(e => die(e.stack || String(e)));
 } else {
-  module.exports = { githubSlug, tree, parseArgs, TOOLS, SKILL_INSTRUCTIONS, MODELS, loadGlobalMemoryAndRules };
+  module.exports = { githubSlug, tree, parseArgs, TOOLS, SKILL_INSTRUCTIONS, MODELS, loadGlobalMemoryAndRules, querySelectiveMemory };
 }
