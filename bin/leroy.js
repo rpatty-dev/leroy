@@ -108,6 +108,13 @@ function resolveRoot(target) {
   if (!slug) {
     const p = path.resolve(target || process.cwd());
     if (!fs.existsSync(p)) die(`Leroy can't find ${p} 🐇`);
+    // If user launched from home directory and no repo is in ~, check if ~/leroy exists as default coding meadow
+    if (p === os.homedir()) {
+      const defaultMeadow = path.join(os.homedir(), 'leroy');
+      if (fs.existsSync(path.join(defaultMeadow, '.git'))) {
+        return defaultMeadow;
+      }
+    }
     return p;
   }
   const dest = path.join(REPOS, `${slug.owner}__${slug.repo}`);
@@ -472,6 +479,9 @@ async function runTool(name, a, ctx) {
 
     if (name === 'read_file') {
       const full = inside(root, a.path);
+      if (!fs.existsSync(full)) {
+        return `File "${a.path}" does not exist in "${root}". Available files:\n${tree(root, 1, 15)}`;
+      }
       const lines = fs.readFileSync(full, 'utf8').split('\n');
       const s = Math.max(1, a.start_line || 1), e = Math.min(lines.length, a.end_line || s + 80);
       return cap(lines.slice(s - 1, e).map((l, i) => `${s + i}| ${l}`).join('\n'), 2500);
