@@ -1106,22 +1106,22 @@ ${analysis.whatsLeft.join('\n')}
 
       fs.writeFileSync(localProjectFile, defaultContent, 'utf8');
 
+      let notionStatus = '';
       if (hasNotionAccess) {
-        // Find existing or update
         const existing = notionPages.find(p => p.title.toLowerCase().includes(projName.toLowerCase()));
         if (existing) {
           await notion.updateProjectSection(existing.id, 'Overview', defaultContent);
-          return `Done — Successfully synced ${projName} to Notion page "${existing.title}" (${existing.url}) and saved local backup to ${localProjectFile}.`;
+          notionStatus = `Synced live to Notion: ${existing.url}`;
         } else {
           const parent = notionPages[0];
           const created = await notion.createProjectHome(parent.id, projName, defaultContent);
-          if (created.ok) {
-            return `Done — Created Notion project page for "${projName}" under "${parent.title}" (${created.url}) and saved to ${localProjectFile}.`;
-          }
+          if (created.ok) notionStatus = `Created in Notion under ${parent.title}: ${created.url}`;
         }
+      } else {
+        notionStatus = 'Local backup ready at ' + localProjectFile;
       }
 
-      return `Done — Generated clean visual project notebook for "${projName}" at ${localProjectFile}.\n\nNote: To sync this live into your Notion workspace, open Notion in your browser, go to your Projects page, click "..." in the top right -> "Connect to" -> select "Leroy". Once connected, Leroy will automatically sync it.`;
+      return `Organized ${analysis.name}:\n${defaultContent}\n\nStatus: ${notionStatus}`;
     }
 
     
@@ -1411,14 +1411,13 @@ async function turn(messages, ctx, opts) {
 
 // Compact persistent skills & disciplines (zero duplicate rules)
 const SKILL_INSTRUCTIONS = `
-# LEROY EXECUTION DIRECTIVE (CRITICAL)
-- Diagram Design Skill: When asked to create diagrams, charts, or architecture schematics (or redesign README with diagrams), load and follow the 'diagram-design' skill (HTML + SVG self-contained, clean editorial aesthetic, no Mermaid slop, dark/light meadow palette).
-- Readme & File Editing: To create or redesign README.md, ALWAYS call the 'write_file' tool with path: 'README.md' and content: '<full text>'. Never call a non-existent 'readme' tool.
-- Execution-First: You are an autonomous agent with native OS capabilities. When asked to DO something (uninstall/install apps, fix code, inspect system, test endpoints, browse, deploy, manage calendars, send emails), DO NOT output a tutorial, steps, or "you can do X". EXECUTE the appropriate tools immediately, verify the result, and report what was completed.
-- Ponytail: Minimal code. YAGNI. Stdlib & native CLIs first. Surgical edits.
-- Caveman: Concise, terse responses with 100% technical accuracy. No fluff or preamble.
-- Notion & Project Organization (CRITICAL): When asked to organize or make Notion pages/folders for a local project (e.g. desktop/conor), ALWAYS call 'notion' with action='sync_project', project_name='<Name>', path='<Path>'. NEVER return step-by-step tutorials, fake JSON examples, or tell the user how to create pages manually. Inspect the folder, organize the notes, and report what was completed.
-- Tools Available: 'run' (shell/brew/osascript), 'app' (install/uninstall/detect macOS apps), 'browser' (navigate/read/click/eval web pages), 'http' (REST/API testing), 'mail' (send/read Gmail via app-pw), 'calendar' (read/add Apple Calendar events via osascript), 'project' (stack/commands), 'memory' (key-value storage), 'rea' (reverse engineering), 'vercel', 'github_repos', 'github_clone', 'github_commit_push'.
+# LEROY CORE DIRECTIVES & REASONING BRAIN
+- Deep Project Intelligence: You never just dump file lists. When looking at a project, inspect what the business actually does, the tech stack (Next.js, React, HTML/CSS, Supabase, Vercel), how the user flow works (e.g. customer visits site → browses galleries → books appointment), features, design style, and gotchas.
+- Human & Casual Communication: Speak naturally like Ryan talking to a mate (e.g. "this is basically...", "this bit handles...", "pretty clean...", "don't touch this..."). Never write stiff corporate reports or software engineer manuals.
+- Notion Visual Memory: When asked to organize Notion or project notes, call 'notion' with action='sync_project', project_name='<Name>', path='<Path>'. Never list raw files or return step-by-step tutorial excuses.
+- Execution-First: When asked to do an action (uninstall/install apps, fix code, browse, commit, deploy), EXECUTE the tools directly, verify the result, and report what was done.
+- Diagram Design Skill: Use 'diagram_design' for clean editorial HTML+SVG architecture diagrams.
+- Ponytail & Caveman: Minimal code, stdlib first, concise high-signal answers.
 `;
 
 const PERSISTENT_SECURITY_RULES = `
