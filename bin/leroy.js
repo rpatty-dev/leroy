@@ -974,8 +974,11 @@ async function completion(messages, tools, onText) {
       model: 'LeroyObliterated',
       messages,
       tools: tools.length > 0 ? tools : undefined,
+      tool_choice: tools.length > 0 ? 'auto' : undefined,
       stream: true,
-      temperature: 0.2
+      temperature: 0.2,
+      presence_penalty: 0.3,
+      frequency_penalty: 0.3
     })
   });
 
@@ -1048,7 +1051,8 @@ async function turn(messages, ctx, opts) {
       res = await completion(messages, activeTools, t => {
         streamedTokens += t;
         const trimmed = streamedTokens.trimStart();
-        if (trimmed.startsWith('{') || trimmed.startsWith('```json') || trimmed.startsWith('```')) {
+        // If the model is outputting a JSON object or code block tool call, NEVER stream it to terminal!
+        if (isSuppressedToolJson || trimmed.startsWith('{') || trimmed.startsWith('```json') || trimmed.startsWith('```')) {
           isSuppressedToolJson = true;
           return;
         }
@@ -1089,20 +1093,18 @@ async function turn(messages, ctx, opts) {
     // Filter hallucinated tools that do not exist in TOOLS
     const validCalls = (res.calls || []).filter(c => TOOLS.some(t => t.function.name === c.name));
 
-    // If suppressed tool json produced no valid calls, print the text response so user is never left with blank screen
-    if (!validCalls.length && isSuppressedToolJson && res.text) {
-      process.stdout.write(sky('🐇 '));
-      process.stdout.write(res.text);
-      console.log();
-    }
-
-    // Strip out any JSON tool payloads from assistantText so the user never sees raw JSON strings
+    // Strip out any JSON tool payloads from assistantText so raw tool calls are NEVER printed as speech
     let assistantText = (res.text || '')
       .replace(/\`\`\`json[\s\S]*?\`\`\`/g, '')
       .replace(/\`\`\`[\s\S]*?\`\`\`/g, '')
       .replace(/\{\s*"name"\s*:\s*"[^"]+?"\s*,\s*"arguments"\s*:[\s\S]*?\}/g, '')
       .trim();
-    if (assistantText) console.log();
+
+    // If valid calls exist, DO NOT echo hallucinated tool text or raw JSON to stdout!
+    if (!validCalls.length && isSuppressedToolJson && !assistantText) {
+      // Empty hallucinated tool call with no valid tools
+      console.log(dim('  (Adjusting approach...)'));
+    }
 
     const msg = { role: 'assistant', content: assistantText };
     if (validCalls.length) {
