@@ -176,6 +176,13 @@ function runRea(cmd, extraArgs, cwd) {
 
 // Tool definitions with category tags for Dynamic Tool Loading
 const TOOL_DEFINITIONS = {
+  diagram_design: fn('diagram_design', 'Generate or embed an editorial HTML/SVG architecture diagram using diagram-design skill into a target file', {
+    target_file: { type: 'string', description: 'File to update, e.g. README.md' },
+    diagram_type: { type: 'string', description: 'architecture, flowchart, process, or layer_stack' },
+    title: { type: 'string', description: 'Diagram title' },
+    svg_content: { type: 'string', description: 'Self-contained SVG/HTML diagram markup' }
+  }, ['target_file', 'svg_content']),
+
   // Core Code & Filesystem Tools (Default)
   list_dir: fn('list_dir', 'List files in local directory (token-compacted with tree/rtk)', { path: { type: 'string' } }),
   read_file: fn('read_file', 'Read targeted range of a file with line numbers', { path: { type: 'string' }, start_line: { type: 'integer' }, end_line: { type: 'integer' } }, ['path']),
@@ -852,6 +859,28 @@ end tell`;
       }
     }
 
+    
+    if (name === 'diagram_design' || name === 'diagram-design') {
+      const target = inside(root, a.target_file || a.path || 'README.md');
+      const svg = a.svg_content || a.content || '';
+      if (!svg) {
+        // If model called it to inspect range, redirect to read_file
+        if (a.path || a.start_line) {
+          const lines = fs.readFileSync(target, 'utf8').split('\n');
+          const s = Math.max(1, a.start_line || 1), e = Math.min(lines.length, a.end_line || s + 80);
+          return cap(lines.slice(s - 1, e).map((l, i) => `${s + i}| ${l}`).join('\n'), 2500);
+        }
+        return 'diagram_design error: svg_content required';
+      }
+      let existing = '';
+      if (fs.existsSync(target)) existing = fs.readFileSync(target, 'utf8');
+      const updated = existing.includes('<!-- diagram -->')
+        ? existing.replace(/<!-- diagram -->[\s\S]*?<!-- \/diagram -->/, `<!-- diagram -->\n${svg}\n<!-- /diagram -->`)
+        : `${existing}\n\n<!-- diagram -->\n${svg}\n<!-- /diagram -->\n`;
+      fs.writeFileSync(target, updated, 'utf8');
+      return `Successfully embedded diagram into ${path.basename(target)}`;
+    }
+
     return `unknown tool ${name}`;
   } catch (e) {
     return `error: ${e.message}`;
@@ -1037,9 +1066,21 @@ async function turn(messages, ctx, opts) {
     }
     if (!started) stop();
 
-    // Map common model alias hallucinations
+    // Map all common model alias hallucinations
     for (const c of (res.calls || [])) {
-      if (c.name === 'readme') {
+      if (c.name === 'diagram-design' || c.name === 'diagram_design') {
+        let a = {}; try { a = JSON.parse(c.args || '{}'); } catch {}
+        if (a.path && (a.start_line || a.end_line)) {
+          c.name = 'read_file';
+          c.args = JSON.stringify({ path: a.path, start_line: a.start_line, end_line: a.end_line });
+        } else if (a.content || a.svg_content) {
+          c.name = 'write_file';
+          c.args = JSON.stringify({ path: a.path || a.target_file || 'README.md', content: a.content || a.svg_content });
+        } else {
+          c.name = 'read_file';
+          c.args = JSON.stringify({ path: a.path || 'README.md', start_line: 1, end_line: 100 });
+        }
+      } else if (c.name === 'readme') {
         c.name = 'write_file';
         let a = {}; try { a = JSON.parse(c.args || '{}'); } catch {}
         c.args = JSON.stringify({ path: 'README.md', content: a.content || a.text || '' });
@@ -1055,11 +1096,12 @@ async function turn(messages, ctx, opts) {
       console.log();
     }
 
-    // If tool calls were extracted from jsonMatch, don't echo the raw json as assistant text
-    let assistantText = res.text || '';
-    if (validCalls.length && assistantText.includes(validCalls[0].name)) {
-      assistantText = '';
-    }
+    // Strip out any JSON tool payloads from assistantText so the user never sees raw JSON strings
+    let assistantText = (res.text || '')
+      .replace(/\`\`\`json[\s\S]*?\`\`\`/g, '')
+      .replace(/\`\`\`[\s\S]*?\`\`\`/g, '')
+      .replace(/\{\s*"name"\s*:\s*"[^"]+?"\s*,\s*"arguments"\s*:[\s\S]*?\}/g, '')
+      .trim();
     if (assistantText) console.log();
 
     const msg = { role: 'assistant', content: assistantText };
