@@ -1316,27 +1316,7 @@ function loadGlobalMemoryAndRules() {
 
 
 async function runSetup() {
-  const COMMANDS = [
-    { cmd: '/tree', desc: 'Show visual project tree' },
-    { cmd: '/compact', desc: 'Compact prior context to save token window' },
-    { cmd: '/model', desc: 'Display active model & switch status' },
-    { cmd: '/tools', desc: 'List active and available tools' },
-    { cmd: '/notion', desc: 'Inspect Notion project visual memory' },
-    { cmd: '/clear', desc: 'Refresh context and start a clean session' },
-    { cmd: '/exit', desc: 'Hop out of the meadow' }
-  ];
-
-  function completer(line) {
-    if (line.startsWith('/')) {
-      const hits = COMMANDS.filter(c => c.cmd.startsWith(line));
-      if (line === '/') {
-        console.log('\n' + meadow('🌾 Available Commands:'));
-        COMMANDS.forEach(c => console.log(`  ${carrot(c.cmd.padEnd(10))} ${dim(c.desc)}`));
-      }
-      return [hits.map(c => c.cmd), line];
-    }
-    return [[], line];
-  }
+  
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, completer });
   const ask = q => new Promise(r => rl.question(`${q} `, r));
@@ -1405,6 +1385,25 @@ async function runSetup() {
   process.exit(0);
 }
 
+
+const SLASH_COMMANDS = [
+  { cmd: '/tree', desc: 'Show visual project tree' },
+  { cmd: '/compact', desc: 'Compact prior context to save token window' },
+  { cmd: '/model', desc: 'Display active model & switch status' },
+  { cmd: '/tools', desc: 'List active and available tools' },
+  { cmd: '/notion', desc: 'Inspect Notion project visual memory' },
+  { cmd: '/clear', desc: 'Refresh context and start a clean session' },
+  { cmd: '/exit', desc: 'Hop out of the meadow' }
+];
+
+function slashCompleter(line) {
+  if (line.startsWith('/')) {
+    const hits = SLASH_COMMANDS.filter(c => c.cmd.startsWith(line));
+    return [hits.map(c => c.cmd), line];
+  }
+  return [[], line];
+}
+
 async function main() {
   if (process.argv.slice(2)[0] === 'setup') return runSetup();
   const opts = parseArgs(process.argv.slice(2));
@@ -1417,7 +1416,7 @@ async function main() {
   console.log(`${meadow('🌿 Meadow:')} ${cream(root)}\n`);
   await ensureServer(opts);
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, completer: slashCompleter });
   const ask = q => opts.yes ? Promise.resolve(true) : new Promise(r => rl.question(`${q} ${dim('[y/N]')} `, a => r(/^y/i.test(a))));
 
   const fresh = () => [{ role: 'system', content: 'You are Leroy 🐇, a calm rabbit-themed expert reverse-engineer and programmer resting in a quiet clover meadow. Reply concisely and helpfully.' }];
@@ -1432,9 +1431,19 @@ async function main() {
   const prompt = () => rl.question(`${carrot('🥕')} ${sky('›')} `, async line => {
     line = line.trim();
     if (!line) return prompt();
+    if (line === '/' || line === '/help') {
+      console.log('\n' + meadow('🌾 Available Commands:'));
+      SLASH_COMMANDS.forEach(c => console.log(`  ${carrot(c.cmd.padEnd(12))} ${dim(c.desc)}`));
+      return prompt();
+    }
     if (line === '/exit' || line === '/quit') {
       console.log(flower('Bye! Hopping back through the flowers... 🐇🌸💨'));
       process.exit(0);
+    }
+    if (line === '/' || line === '/help') {
+      console.log('\n' + meadow('🌾 Available Commands:'));
+      SLASH_COMMANDS.forEach(c => console.log(`  ${carrot(c.cmd.padEnd(10))} ${dim(c.desc)}`));
+      return prompt();
     }
     if (line === '/clear') {
       messages = fresh();
