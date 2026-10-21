@@ -28,7 +28,8 @@ function resolveModelPath(primaryName, fallbackName) {
 
 const MODELS = {
   main: resolveModelPath('LeroyObliterated.gguf', 'LeroyObliterated.Q4_K_M.gguf'),
-  fast: resolveModelPath('Qwen2.5-Coder-3B-Instruct.gguf', 'Qwen2.5-Coder-3B-abliterated.Q4_K_M.gguf')
+  fast: resolveModelPath('LeroyObliterated.gguf', 'Qwen2.5-Coder-3B-Instruct.gguf'),
+  strong: resolveModelPath('Qwen2.5-Coder-7B-Instruct-abliterated-Q4_K_M.gguf', 'Qwen2.5-Coder-7B-Instruct-abliterated.gguf')
 };
 const REPOS = path.join(os.homedir(), '.leroy', 'repos');
 const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'target', '__pycache__', '.venv', 'vendor']);
@@ -55,10 +56,11 @@ ${dim('       Metal GPU / AVX  •  RTK Compression  •  Ponytail  •  REA')}
 `;
 
 function parseArgs(argv) {
-  const o = { target: null, fast: false, yes: false, ctx: 4096 };
+  const o = { target: null, fast: false, strong: false, yes: false, ctx: 4096 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--fast') o.fast = true;
+    else if (a === '--strong') o.strong = true;
     else if (a === '--yes' || a === '-y') o.yes = true;
     else if (a === '--ctx') o.ctx = parseInt(argv[++i], 10) || 4096;
     else if (a === '-h' || a === '--help') o.help = true;
@@ -195,10 +197,106 @@ const TOOLS = [
   fn('vercel', 'Execute Vercel CLI commands to view projects, deployments, domains, or logs (e.g. "project ls", "deployments ls", "whoami", "ls")', {
     command: { type: 'string', description: 'Vercel command or subcommand, e.g. "project ls", "deployments ls", "whoami"' }
   }),
+  fn('project', 'Detect or inspect current project metadata (name, stack, dev/build/test/deploy commands, environment, git repo, deploy targets, key paths)', {
+    action: { type: 'string', description: 'Action: "info", "set", or "detect"', enum: ['info', 'set', 'detect'] },
+    key: { type: 'string', description: 'Specific key to inspect or update (e.g. "dev", "build", "test", "stack", "deploy")' },
+    value: { type: 'string', description: 'Value to set if action is "set"' }
+  }),
+  fn('memory', 'Structured persistent memory tool: get, set, list, or delete structured keys without dumping giant unneeded context', {
+    action: { type: 'string', enum: ['get', 'set', 'list', 'delete'], description: 'Action to perform' },
+    key: { type: 'string', description: 'Memory key or category (e.g. "tech_stack", "preferred_port", "user_notes")' },
+    value: { type: 'string', description: 'Value to record when action is "set"' }
+  }),
   fn('read_memory', 'Selectively look up saved user credentials, accounts, or persistent environment notes', {
     topic: { type: 'string', description: 'Topic or key to query: e.g. "email", "credentials", "accounts", "rules", or "all"' }
   })
 ];
+
+function detectProject(root) {
+  const p = {
+    name: path.basename(root),
+    stack: 'unknown',
+    dev: null,
+    build: null,
+    test: null,
+    deploy: null,
+    repo: null,
+    environment: 'development',
+    important_paths: []
+  };
+
+  // Git remote
+  try {
+    const gr = spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: root, encoding: 'utf8' });
+    if (gr.status === 0 && gr.stdout.trim()) p.repo = gr.stdout.trim();
+  } catch {}
+
+  // Package.json detection
+  const pkgJsonPath = path.join(root, 'package.json');
+  if (fs.existsSync(pkgJsonPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      p.name = pkg.name || p.name;
+      const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+      if (deps.next) p.stack = 'Next.js (React)';
+      else if (deps.react) p.stack = 'React';
+      else if (deps.vue) p.stack = 'Vue.js';
+      else if (deps.express) p.stack = 'Node.js Express';
+      else p.stack = 'Node.js';
+
+      if (pkg.scripts) {
+        if (pkg.scripts.dev) p.dev = 'npm run dev';
+        else if (pkg.scripts.start) p.dev = 'npm start';
+        if (pkg.scripts.build) p.build = 'npm run build';
+        if (pkg.scripts.test) p.test = 'npm test';
+      }
+      p.important_paths.push('package.json');
+    } catch {}
+  }
+
+  // Python detection
+  if (fs.existsSync(path.join(root, 'requirements.txt')) || fs.existsSync(path.join(root, 'pyproject.toml'))) {
+    p.stack = p.stack === 'unknown' ? 'Python' : `${p.stack} + Python`;
+    p.important_paths.push('pyproject.toml');
+  }
+
+  // Cargo / Rust detection
+  if (fs.existsSync(path.join(root, 'Cargo.toml'))) {
+    p.stack = 'Rust';
+    p.build = 'cargo build';
+    p.test = 'cargo test';
+    p.important_paths.push('Cargo.toml');
+  }
+
+  // Vercel / Deploy targets
+  if (fs.existsSync(path.join(root, 'vercel.json')) || fs.existsSync(path.join(root, '.vercel'))) {
+    p.deploy = 'vercel deploy';
+    p.important_paths.push('vercel.json');
+  }
+
+  return p;
+}
+
+const STRUCTURED_MEM_FILE = path.join(LEROY_DIR, 'structured_memory.json');
+function getStructuredMemory() {
+  if (fs.existsSync(STRUCTURED_MEM_FILE)) {
+    try { return JSON.parse(fs.readFileSync(STRUCTURED_MEM_FILE, 'utf8')); } catch {}
+  }
+  return {};
+}
+function saveStructuredMemory(mem) {
+  fs.mkdirSync(LEROY_DIR, { recursive: true });
+  fs.writeFileSync(STRUCTURED_MEM_FILE, JSON.stringify(mem, null, 2), 'utf8');
+}
+
+function classifyComplexity(prompt) {
+  // Routes to strong (7B) model on reverse-engineering, security audits, decompilation, complex bugs
+  const strongPatterns = [
+    /\b(reverse[- ]engineer|disassemble|decompile|ghidra|ida|macho|elf|pe32|binary|exploit|vulnerability|cve|overflow|heap|rop|fuzz|bug[- ]bounty|audit)\b/i,
+    /\b(architect|refactor|concurrency|race condition|memory leak|deadlock|crypto|protocol)\b/i
+  ];
+  return strongPatterns.some(re => re.test(prompt));
+}
 
 function grep(root, base, re, hits = [], limit = 30) {
   let st; try { st = fs.statSync(base); } catch { return hits; }
@@ -344,6 +442,37 @@ async function runTool(name, a, ctx) {
       return cap(`exit ${r.status}\n${r.stdout || ''}${r.stderr || ''}`, 2500);
     }
 
+    if (name === 'project') {
+      const p = detectProject(root);
+      if (a.action === 'set' && a.key) {
+        p[a.key] = a.value;
+        return `Updated project ${a.key} = ${a.value}`;
+      }
+      if (a.key && p[a.key] !== undefined) {
+        return `${a.key}: ${JSON.stringify(p[a.key])}`;
+      }
+      return JSON.stringify(p, null, 2);
+    }
+
+    if (name === 'memory') {
+      const mem = getStructuredMemory();
+      const action = a.action || 'list';
+      if (action === 'get') {
+        return a.key && mem[a.key] !== undefined ? JSON.stringify(mem[a.key]) : `Key "${a.key}" not found`;
+      }
+      if (action === 'set' && a.key) {
+        mem[a.key] = a.value;
+        saveStructuredMemory(mem);
+        return `Saved "${a.key}" to structured memory`;
+      }
+      if (action === 'delete' && a.key) {
+        delete mem[a.key];
+        saveStructuredMemory(mem);
+        return `Deleted "${a.key}" from structured memory`;
+      }
+      return `Keys in structured memory: ${Object.keys(mem).join(', ') || '(empty)'}`;
+    }
+
     if (name === 'read_memory') {
       return querySelectiveMemory(a.topic || 'all');
     }
@@ -381,18 +510,30 @@ function findLlamaServer() {
   return null;
 }
 
-async function ensureServer(opts) {
-  if (await serverUp()) return;
-  const model = opts.fast ? MODELS.fast : MODELS.main;
+let currentServerModel = null;
+async function ensureServer(opts, modelType = null) {
+  const chosen = modelType === 'strong' || opts.strong ? MODELS.strong : (modelType === 'fast' || opts.fast ? MODELS.fast : MODELS.main);
+  if (await serverUp() && currentServerModel === chosen) return;
+
+  // If server is up with different model, kill it and restart
+  if (await serverUp() && currentServerModel && currentServerModel !== chosen) {
+    console.log(dim(`🐇 Switching server model to ${path.basename(chosen)}…`));
+    spawnSync('pkill', ['-f', 'llama-server']);
+    await new Promise(r => setTimeout(r, 1200));
+  } else if (await serverUp()) {
+    currentServerModel = chosen;
+    return;
+  }
+
   const exe = findLlamaServer();
   if (!exe) die('Missing llama-server. Install via Homebrew: brew install llama.cpp');
-  if (!fs.existsSync(model)) die(`Missing model:\n  ${model}\nDownload to ~/.leroy/models/LeroyObliterated.gguf`);
+  if (!fs.existsSync(chosen)) die(`Missing model:\n  ${chosen}\nDownload to ~/.leroy/models/`);
 
   const isMacArm = process.platform === 'darwin' && (process.arch === 'arm64' || os.cpus()[0]?.model?.includes('Apple'));
-  console.log(dim(`🥕 Waking up LeroyObliterated in the clover (ctx: ${opts.ctx}, ${isMacArm ? 'Metal GPU accelerated' : 'CPU optimized'})...`));
+  console.log(dim(`🥕 Waking up ${path.basename(chosen, '.gguf')} in the clover (ctx: ${opts.ctx}, ${isMacArm ? 'Metal GPU accelerated' : 'CPU optimized'})...`));
 
   const args = [
-    '-m', model,
+    '-m', chosen,
     '--alias', 'LeroyObliterated',
     '-c', String(opts.ctx),
     '-b', '512',
@@ -412,7 +553,10 @@ async function ensureServer(opts) {
   spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
 
   for (let i = 0; i < 40; i++) {
-    if (await serverUp()) return;
+    if (await serverUp()) {
+      currentServerModel = chosen;
+      return;
+    }
     await new Promise(r => setTimeout(r, 1000));
   }
   die('Failed to start llama-server. Check free memory or port 8080.');
@@ -654,6 +798,11 @@ ${inheritedMemory}
 Repo Overview:
 ${tree(root, 2, 25)}`
       };
+    }
+
+    // Automatic model routing: check if user task requires the secondary strong model
+    if (!opts.fast && !opts.strong && classifyComplexity(line)) {
+      await ensureServer(opts, 'strong');
     }
 
     messages.push({ role: 'user', content: line });
