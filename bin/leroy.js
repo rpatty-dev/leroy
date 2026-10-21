@@ -29,7 +29,7 @@ function resolveModelPath(primaryName, fallbackName) {
 
 const MODELS = {
   main: resolveModelPath('LeroyObliterated.gguf', 'LeroyObliterated.Q4_K_M.gguf'),
-  fast: resolveModelPath('LeroyObliterated.gguf', 'Qwen2.5-Coder-3B-Instruct.gguf'),
+  fast: resolveModelPath('Qwen2.5-Coder-3B-abliterated.Q4_K_M.gguf', 'LeroyObliterated.Q4_K_M.gguf'),
   strong: resolveModelPath('Qwen2.5-Coder-7B-Instruct-abliterated-Q4_K_M.gguf', 'Qwen2.5-Coder-7B-Instruct-abliterated.gguf')
 };
 const REPOS = path.join(os.homedir(), '.leroy', 'repos');
@@ -48,13 +48,82 @@ const earth = s => c('168;162;158', s);   // loam / stone (#a8a29e)
 const dim = s => c('120;113;108', s);     // soft soil (#78716c)
 const red = s => c('252;165;165', s);     // berry red (#fca5a5)
 
+function detectHardware() {
+  const platform = process.platform;
+  const arch = process.arch;
+  const cpus = os.cpus() || [];
+  const cpuModel = cpus[0]?.model || 'Unknown CPU';
+  const totalRamGb = Math.round(os.totalmem() / (1024 * 1024 * 1024));
+  const numCores = cpus.length;
+
+  let gpuType = 'cpu';
+  let gpuName = 'CPU Only';
+  let tpsEstimate = '~4-5 t/s';
+  let badge = '';
+
+  if (platform === 'darwin') {
+    if (arch === 'arm64' || cpuModel.includes('Apple')) {
+      gpuType = 'metal';
+      gpuName = cpuModel.includes('Apple') ? cpuModel : 'Apple Silicon GPU';
+      tpsEstimate = '~35-45 t/s';
+      badge = '● Metal GPU ' + tpsEstimate;
+    } else {
+      gpuType = 'mac-intel';
+      gpuName = 'Intel Mac CPU';
+      tpsEstimate = '~8-12 t/s';
+      badge = '● Intel CPU ' + tpsEstimate;
+    }
+  } else if (platform === 'win32') {
+    let hasNvidia = false;
+    let hasAmd = false;
+    try {
+      const out = spawnSync('wmic', ['path', 'win32_VideoController', 'get', 'name'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500 });
+      if (out && out.stdout) {
+        if (/nvidia|geforce|rtx|gtx/i.test(out.stdout)) hasNvidia = true;
+        else if (/radeon|amd/i.test(out.stdout)) hasAmd = true;
+      }
+    } catch {}
+
+    if (hasNvidia) {
+      gpuType = 'cuda';
+      gpuName = 'NVIDIA CUDA GPU';
+      tpsEstimate = '~35-60 t/s';
+      badge = '● NVIDIA CUDA ' + tpsEstimate;
+    } else if (hasAmd) {
+      gpuType = 'vulkan';
+      gpuName = 'AMD Radeon GPU';
+      tpsEstimate = '~20-40 t/s';
+      badge = '● AMD Vulkan ' + tpsEstimate;
+    } else {
+      gpuType = 'cpu';
+      const shortCpu = cpuModel.replace(/Intel\(R\)\s*Core\(TM\)\s*/i, '').replace(/CPU\s*@.*/i, '').trim();
+      gpuName = shortCpu + ' (' + numCores + ' cores, ' + totalRamGb + 'GB)';
+      tpsEstimate = '~4-5 t/s';
+      badge = '● ' + shortCpu + ' CPU ' + tpsEstimate;
+    }
+  } else {
+    gpuType = 'linux';
+    badge = '● CPU ' + tpsEstimate;
+  }
+
+  // Model recommendation based on hardware
+  // - High-end (Apple Silicon / NVIDIA GPU >= 8GB VRAM / 32GB RAM): 7B model capable
+  // - Medium / Low-end (4-core older CPU / 16GB RAM): 3B-4B Q4_K_M is optimal
+  const recommendedTier = (gpuType === 'metal' || gpuType === 'cuda' || totalRamGb >= 32) ? 'strong' : 'fast';
+
+  return { platform, arch, cpuModel, totalRamGb, numCores, gpuType, gpuName, tpsEstimate, badge, recommendedTier };
+}
+
+const HW = detectHardware();
+
+
 
 function renderAppFrame(statusText = 'Ready', meadowPath = process.cwd()) {
   const width = Math.min(process.stdout.columns || 80, 100);
   const lines = [];
 
   const title = ` ${cream('🐇 L E R O Y')} ${dim('v2.0')} `;
-  const badges = ` ${meadow('● Metal GPU 40 t/s')}  ${sky('● Qwen-3B')}  ${dim('● RTK')} `;
+  const badges = ` ${meadow(HW.badge)}  ${sky('● Qwen-3B')}  ${dim('● RTK')} `;
   const padTop = Math.max(0, width - stripAnsi(title).length - stripAnsi(badges).length - 2);
   lines.push(c('100;116;139', '╭' + '─'.repeat(width - 2) + '╮'));
   lines.push(c('100;116;139', '│') + title + ' '.repeat(padTop) + badges + c('100;116;139', '│'));
@@ -76,7 +145,7 @@ function renderAppFrame(statusText = 'Ready', meadowPath = process.cwd()) {
 const BANNER = `
 ${c('100;116;139', '╭──────────────────────────────────────────────────────────────╮')}
 ${c('100;116;139', '│')}  ${sky('(\\__/ )')}  ${cream('L E R O Y')} ${carrot('🥕')} ${butter('v2.0')}  ${dim('•  Autonomous Local AI Agent')}          ${c('100;116;139', '│')}
-${c('100;116;139', '│')}  ${sky("(='.'= )")}  ${meadow('● Metal GPU 40 t/s')}   ${sky('● RTK Compressed')}   ${flower('● REA / Notion')} ${c('100;116;139', '│')}
+${c('100;116;139', '│')}  ${sky("(='.'= )")}  ${meadow(HW.badge)}   ${sky('● RTK Compressed')}   ${flower('● REA / Notion')} ${c('100;116;139', '│')}
 ${c('100;116;139', '│')}  ${sky('(")_(" )')}  ${earth('Type / for command palette, /clear, /exit')}            ${c('100;116;139', '│')}
 ${c('100;116;139', '╰──────────────────────────────────────────────────────────────╯')}
 `;
@@ -1215,25 +1284,30 @@ async function ensureServer(opts, modelType = null) {
   if (!exe) die('Missing llama-server. Install via Homebrew: brew install llama.cpp');
   if (!fs.existsSync(chosen)) die(`Missing model:\n  ${chosen}\nDownload to ~/.leroy/models/`);
 
-  const isMacArm = process.platform === 'darwin' && (process.arch === 'arm64' || os.cpus()[0]?.model?.includes('Apple'));
-  console.log(dim(`🥕 Waking up ${path.basename(chosen, '.gguf')} in the clover (ctx: ${opts.ctx}, ${isMacArm ? 'Metal GPU accelerated' : 'CPU optimized'})...`));
+  const isHwAccel = HW.gpuType === 'metal' || HW.gpuType === 'cuda' || HW.gpuType === 'vulkan';
+  console.log(dim(`🥕 Waking up ${path.basename(chosen, '.gguf')} [${HW.gpuName}] (ctx: ${opts.ctx}, ${HW.badge})...`));
 
   const args = [
     '-m', chosen,
     '--alias', 'LeroyObliterated',
     '-c', String(opts.ctx),
-    '-b', '512',
-    '-ub', '256',
+    '-b', isHwAccel ? '512' : '256',
+    '-ub', isHwAccel ? '256' : '128',
     '--host', '127.0.0.1',
     '--port', String(PORT),
     '--reasoning-budget', '0'
   ];
 
-  if (isMacArm) {
-    args.push('-ngl', '99'); // Offload 100% of layers to Apple Silicon Metal GPU
-    args.push('-fa', 'on');   // Enable Flash Attention
+  if (HW.gpuType === 'metal') {
+    args.push('-ngl', '99');
+    args.push('-fa', 'on');
+  } else if (HW.gpuType === 'cuda' || HW.gpuType === 'vulkan') {
+    args.push('-ngl', '99');
   } else {
-    args.push('-t', '4');
+    // Windows / CPU only
+    const threadCount = Math.min(HW.numCores, 4);
+    args.push('-t', String(threadCount));
+    args.push('-tb', String(threadCount));
   }
 
   spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
