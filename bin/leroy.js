@@ -81,7 +81,29 @@ function git(args, cwd) {
   return spawnSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
+function findLocalRepo(name) {
+  const norm = name.toLowerCase().replace(/[\s_]/g, '-');
+  const searchCandidates = [
+    process.cwd(),
+    path.join(os.homedir(), norm),
+    path.join(os.homedir(), 'Desktop', norm),
+    path.join(os.homedir(), 'Documents', norm),
+    path.join(os.homedir(), 'Developer', norm),
+    path.join(os.homedir(), 'Projects', norm),
+    path.join(os.homedir(), 'repos', norm),
+    path.join(REPOS, norm)
+  ];
+  for (const c of searchCandidates) {
+    if (fs.existsSync(path.join(c, '.git')) || fs.existsSync(path.join(c, 'package.json'))) return c;
+  }
+  return null;
+}
+
 function resolveRoot(target) {
+  if (target) {
+    const local = findLocalRepo(target);
+    if (local) return local;
+  }
   const slug = githubSlug(target);
   if (!slug) {
     const p = path.resolve(target || process.cwd());
@@ -1291,6 +1313,16 @@ async function main() {
       return prompt();
     }
 
+    // Auto-detect if user refers to a specific local repository (e.g. "for leroy", "for repo leroy", "in PrinterStats")
+    const repoMatch = line.match(/(?:in|for|of|to)\s+(?:the\s+)?(?:git\s*repo(?:sitory)?|repo)?\s*([a-zA-Z0-9_-]+)/i);
+    if (repoMatch && repoMatch[1]) {
+      const detected = findLocalRepo(repoMatch[1]);
+      if (detected && detected !== ctx.root) {
+        ctx.root = detected;
+        console.log(sky(`  🐰 Auto-switched workspace to ${detected}`));
+      }
+    }
+
     // Inject system skills, inherited memory/rules & repo context
     const isGreeting = /^(hi|hello|hey|yo|sup|test|ping)[\s!.]*$/i.test(line);
     if (!isGreeting && messages.length <= 1) {
@@ -1298,13 +1330,13 @@ async function main() {
         role: 'system',
         content: `You are Leroy 🐇, a calm, lop-eared autonomous coding & reverse-engineering agent resting in a meadow.
 Model: LeroyObliterated.
-Working Meadow (Directory): "${path.basename(root)}" (${root}).
+Working Meadow (Directory): "${path.basename(ctx.root)}" (${ctx.root}).
 
 ${SKILL_INSTRUCTIONS}
 ${inheritedMemory}
 
 Repo Overview:
-${tree(root, 2, 25)}`
+${tree(ctx.root, 2, 25)}`
       };
     }
 
