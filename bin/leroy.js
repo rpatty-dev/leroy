@@ -623,28 +623,44 @@ async function runTool(name, a, ctx) {
         const brewUn = spawnSync('brew', ['uninstall', '--cask', appName], { encoding: 'utf8' });
         if (brewUn.status === 0) return `Uninstalled ${appName} via brew cask.`;
 
-        // 2. Locate .app bundles and move to trash or remove
+        // 2. Locate .app bundles and official uninstallers
         const candidates = [
           path.join('/Applications', `${appName}.app`),
+          path.join('/Applications', `${appName.charAt(0).toUpperCase() + appName.slice(1)}.app`),
           path.join(os.homedir(), 'Applications', `${appName}.app`)
         ];
-        let removed = false;
+        let targetApp = null;
         for (const c of candidates) {
-          if (fs.existsSync(c)) {
-            // Check for official uninstaller first
-            const uninstaller = path.join(c, 'Contents', 'Resources', 'uninstaller.sh');
-            if (fs.existsSync(uninstaller)) {
-              spawnSync('sh', [uninstaller], { encoding: 'utf8' });
-            }
-            const rmRes = spawnSync('rm', ['-rf', c], { encoding: 'utf8' });
-            if (rmRes.status === 0) {
-              removed = true;
-              console.log(dim(`Removed ${c}`));
-            }
+          if (fs.existsSync(c)) { targetApp = c; break; }
+        }
+        if (!targetApp) return `Could not find ${appName}.app in /Applications.`;
+
+        // Check for official uninstaller in /Library/Application Support or app bundle
+        const officialUninstallers = [
+          path.join('/Library/Application Support', appName, `${appName}Uninstaller.app`),
+          path.join('/Library/Application Support', 'TeamViewer', 'TeamViewerUninstaller.app'),
+          path.join(targetApp, 'Contents', 'Resources', 'uninstaller.sh')
+        ];
+        for (const un of officialUninstallers) {
+          if (fs.existsSync(un)) {
+            console.log(dim(`Running official uninstaller: ${un}...`));
+            spawnSync('open', ['-a', un], { encoding: 'utf8' });
           }
         }
-        if (removed) return `Done — ${appName} was successfully uninstalled and verified removed.`;
-        return `Could not find ${appName}.app in /Applications. Run detect first.`;
+
+        // Try direct rm
+        let rmRes = spawnSync('rm', ['-rf', targetApp], { encoding: 'utf8' });
+        if (rmRes.status === 0 && !fs.existsSync(targetApp)) {
+          return `Done — ${appName} was successfully uninstalled and removed from ${targetApp}.`;
+        }
+
+        // If permission denied due to root ownership, use osascript with administrator privileges
+        console.log(dim(`Root ownership detected on ${targetApp}. Requesting admin authorization to move to Trash...`));
+        const adminRm = spawnSync('osascript', ['-e', `do shell script "rm -rf '${targetApp}'" with administrator privileges`], { encoding: 'utf8' });
+        if (adminRm.status === 0 && !fs.existsSync(targetApp)) {
+          return `Done — ${appName} was successfully uninstalled from ${targetApp}.`;
+        }
+        return `Failed to remove ${targetApp}. Error: ${adminRm.stderr || rmRes.stderr || 'Permission denied'}`;
       }
 
       if (act === 'install') {
@@ -971,19 +987,22 @@ async function turn(messages, ctx, opts) {
   for (let step = 0; step < 8; step++) {
     const stop = spinner(step ? 'nibbling clover…' : 'resting in the meadow…');
     let started = false, res;
+    let streamedTokens = '';
+    let isSuppressedToolJson = false;
     try {
       res = await completion(messages, activeTools, t => {
-        // If this looks like the start of a raw JSON tool call, don't stream it to user terminal
+        streamedTokens += t;
+        const trimmed = streamedTokens.trimStart();
+        if (trimmed.startsWith('{') || trimmed.startsWith('```json') || trimmed.startsWith('```')) {
+          isSuppressedToolJson = true;
+          return;
+        }
         if (!started) {
           started = true;
           stop();
-          if (!t.trim().startsWith('{') && !t.trim().startsWith('```')) {
-            process.stdout.write(sky('🐇 '));
-            process.stdout.write(t);
-          }
-        } else {
-          process.stdout.write(t);
+          process.stdout.write(sky('🐇 '));
         }
+        process.stdout.write(t);
       });
     } catch (e) {
       stop();
