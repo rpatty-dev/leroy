@@ -127,3 +127,7 @@ Inside the Leroy prompt (`🥕 ›`):
 
 ## ⚖️ License
 MIT License • Created by [rpatty-dev](https://github.com/rpatty-dev)
+
+---
+
+Built with help from [Nitech](https://nitech.dev).
