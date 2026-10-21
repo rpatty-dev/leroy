@@ -1,0 +1,10 @@
+const { githubSlug, tree, parseArgs } = require('./bin/leroy.js');
+const assert = require('assert');
+assert.deepStrictEqual(githubSlug('https://github.com/anomalyco/opencode'), { owner: 'anomalyco', repo: 'opencode' });
+assert.deepStrictEqual(githubSlug('https://github.com/a/b.git'), { owner: 'a', repo: 'b' });
+assert.deepStrictEqual(githubSlug('https://github.com/a/b/tree/main/x'), { owner: 'a', repo: 'b' });
+assert.deepStrictEqual(githubSlug('anomalyco/opencode'), { owner: 'anomalyco', repo: 'opencode' });
+assert.strictEqual(githubSlug('C:\\Users'), null);
+assert.strictEqual(githubSlug(null), null);
+assert.strictEqual(parseArgs(['x', '--fast', '--ctx', '4096']).ctx, 4096);
+console.log('leroy self-check OK');

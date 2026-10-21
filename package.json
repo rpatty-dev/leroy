@@ -1,0 +1,24 @@
+{
+  "name": "leroy",
+  "version": "2.0.0",
+  "description": "Autonomous bunny-themed local coding & reverse-engineering agent CLI powered by llama.cpp and REA",
+  "main": "bin/leroy.js",
+  "bin": {
+    "leroy": "./bin/leroy.js"
+  },
+  "scripts": {
+    "start": "node bin/leroy.js",
+    "test": "node selfcheck.js"
+  },
+  "keywords": [
+    "ai-agent",
+    "coding-agent",
+    "reverse-engineering",
+    "rea",
+    "opencode",
+    "llama-cpp",
+    "local-llm"
+  ],
+  "author": "rpatty-dev",
+  "license": "MIT"
+}
