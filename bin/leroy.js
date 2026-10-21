@@ -82,7 +82,7 @@ ${c('100;116;139', '╰───────────────────
 `;
 
 function parseArgs(argv) {
-  const o = { target: null, fast: false, strong: false, yes: false, ctx: 4096 };
+  const o = { target: null, fast: false, strong: false, yes: false, ctx: 4096, version: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--fast') o.fast = true;
@@ -90,6 +90,7 @@ function parseArgs(argv) {
     else if (a === '--yes' || a === '-y') o.yes = true;
     else if (a === '--ctx') o.ctx = parseInt(argv[++i], 10) || 4096;
     else if (a === '-h' || a === '--help') o.help = true;
+    else if (a === '-v' || a === '--version' || a === 'version') o.version = true;
     else if (!o.target) o.target = a;
   }
   return o;
@@ -1584,15 +1585,54 @@ function slashCompleter(line) {
   return [[], line];
 }
 
+
+function checkVersion() {
+  const pkgPath = path.join(__dirname, '..', 'package.json');
+  let currentVer = '2.0.0';
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    currentVer = pkg.version;
+  } catch {}
+
+  let latestVer = currentVer;
+  let hasUpdate = false;
+  try {
+    const res = spawnSync('git', ['ls-remote', '--heads', 'origin', 'master'], {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8',
+      timeout: 3000
+    });
+    const localHash = spawnSync('git', ['rev-parse', 'HEAD'], {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8'
+    }).stdout.trim().slice(0, 7);
+
+    if (res.stdout) {
+      const remoteHash = res.stdout.trim().split(/\s+/)[0].slice(0, 7);
+      if (remoteHash && localHash && remoteHash !== localHash) {
+        hasUpdate = true;
+      }
+    }
+  } catch {}
+
+  return { current: currentVer, hasUpdate };
+}
+
 async function main() {
   if (process.argv.slice(2)[0] === 'setup') return runSetup();
   const opts = parseArgs(process.argv.slice(2));
+  const ver = checkVersion();
+  if (opts.version) {
+    console.log('Leroy v' + ver.current + (ver.hasUpdate ? ' (Update available on origin/master - run git pull)' : ' (Latest release)'));
+    return;
+  }
   if (opts.help) {
     console.log(BANNER + `\nUsage:\n  leroy <github-url | owner/repo | local-path>\n  leroy\n\nOptions:\n  --fast    Use 3B Coder model\n  --yes     Auto-approve changes\n  --ctx N   Context tokens (default: 4096)`);
     return;
   }
   const root = resolveRoot(opts.target);
   console.log(renderAppFrame('Ready', root));
+  console.log(dim(`  📦 Version: v${ver.current} ${ver.hasUpdate ? red('● Update available (run git pull)') : meadow('● Latest version')}`));
   await ensureServer(opts);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, completer: slashCompleter });
