@@ -192,6 +192,9 @@ const TOOLS = [
     command: { type: 'string', enum: REA_SAFE },
     args: { type: 'string', description: 'Arguments like file path or options' }
   }, ['command']),
+  fn('vercel', 'Execute Vercel CLI commands to view projects, deployments, domains, or logs (e.g. "project ls", "deployments ls", "whoami", "ls")', {
+    command: { type: 'string', description: 'Vercel command or subcommand, e.g. "project ls", "deployments ls", "whoami"' }
+  }),
   fn('read_memory', 'Selectively look up saved user credentials, accounts, or persistent environment notes', {
     topic: { type: 'string', description: 'Topic or key to query: e.g. "email", "credentials", "accounts", "rules", or "all"' }
   })
@@ -332,6 +335,13 @@ async function runTool(name, a, ctx) {
     if (name === 'rea') {
       console.log(sky(`  🐰 Inspecting artifact with REA: rea ${a.command} ${a.args || ''}`));
       return runRea(a.command, a.args, root);
+    }
+
+    if (name === 'vercel') {
+      const sub = (a.command || 'project ls').trim();
+      console.log(sky(`  🐰 Running Vercel CLI: vercel ${sub}…`));
+      const r = spawnSync('vercel', sub.split(/\s+/), { cwd: root, encoding: 'utf8', timeout: 30000 });
+      return cap(`exit ${r.status}\n${r.stdout || ''}${r.stderr || ''}`, 2500);
     }
 
     if (name === 'read_memory') {
@@ -540,7 +550,8 @@ const SKILL_INSTRUCTIONS = `
 # LEROY CORE SKILLS
 - Ponytail: Minimal code. YAGNI. Reuse existing patterns. Stdlib first. Surgical changes.
 - Caveman: Concise, fluff-free responses with exact technical accuracy.
-- Tool Usage: Call 'github_repos' to list/search remote GitHub repos, 'github_clone' to clone/switch repo, 'github_commit_push' to sanitize, commit & push, 'list_dir' for local directory contents, 'read_file' for code, 'run' for shell commands, 'rea' for binary analysis, 'read_memory' for credentials/keys.
+- Execution & Unrestricted Developer Capability: You run locally on Metal GPU / CPU with full access to developer CLI tools and the internet (git, gh, vercel, npm, curl, rea, etc.). Never claim to be offline or unable to access external services or inspect web projects.
+- Tool Usage: Call 'vercel' to list/inspect Vercel projects or deployments, 'github_repos' to list/search remote GitHub repos, 'github_clone' to clone/switch repo, 'github_commit_push' to sanitize, commit & push, 'list_dir' for local directory contents, 'read_file' for code, 'run' for shell commands, 'rea' for binary analysis, 'read_memory' for credentials/keys.
 - REA: Use 'rea' tool to analyze binaries, Mach-O/PE/ELF executables, and web bundles.
 - Taste: Calm visual hierarchy, dark palette, intentional layout.
 `;
@@ -633,7 +644,7 @@ async function main() {
     if (!isGreeting && messages.length <= 1) {
       messages[0] = {
         role: 'system',
-        content: `You are Leroy 🐇, a calm, lop-eared offline AI coding & reverse-engineering agent resting peacefully in a meadow.
+        content: `You are Leroy 🐇, a calm, lop-eared autonomous coding & reverse-engineering agent resting in a meadow.
 Model: LeroyObliterated.
 Working Meadow (Directory): "${path.basename(root)}" (${root}).
 
