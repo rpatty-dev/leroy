@@ -1565,9 +1565,8 @@ async function main() {
     console.log(BANNER + `\nUsage:\n  leroy <github-url | owner/repo | local-path>\n  leroy\n\nOptions:\n  --fast    Use 3B Coder model\n  --yes     Auto-approve changes\n  --ctx N   Context tokens (default: 4096)`);
     return;
   }
-  console.log(BANNER);
   const root = resolveRoot(opts.target);
-  console.log(`${meadow('🌿 Meadow:')} ${cream(root)}\n`);
+  console.log(renderAppFrame('Connecting to Metal GPU server...', '', ''));
   await ensureServer(opts);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, completer: slashCompleter });
@@ -1577,7 +1576,7 @@ async function main() {
   let messages = fresh();
   const ctx = { root, ask };
 
-  console.log(meadow('✓ Leroy is relaxing in the clover with full Metal GPU & RTK acceleration.'));
+  
   console.log(dim('Type your question or instruction. /tree, /clear, /exit.\n'));
 
   const inheritedMemory = loadGlobalMemoryAndRules();
