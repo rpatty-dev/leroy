@@ -597,6 +597,27 @@ async function runTool(name, a, ctx) {
       const act = a.action || 'detect';
       const appName = (a.name || '').trim();
       if (!appName) return 'Error: app name required';
+      const isWin = process.platform === 'win32';
+
+      if (isWin) {
+        if (act === 'detect' || act === 'list') {
+          const r = spawnSync('winget', ['list', '-q', appName], { encoding: 'utf8', shell: true });
+          if (r.status === 0 && r.stdout.includes(appName)) return `Application "${appName}" is INSTALLED:\n${r.stdout.trim()}`;
+          const ps = spawnSync('powershell', ['-NoProfile', '-Command', `Get-AppxPackage -Name '*${appName}*' | Select-Object -ExpandProperty Name`], { encoding: 'utf8' });
+          if (ps.status === 0 && ps.stdout.trim()) return `Application "${appName}" found in AppxPackages:\n${ps.stdout.trim()}`;
+          return `Application "${appName}" is NOT installed on this Windows PC.`;
+        }
+        if (act === 'install') {
+          if (!(await ask(`${carrot('📦')} Install ${cream(appName)} via winget?`))) return 'User declined installation.';
+          const r = spawnSync('winget', ['install', '--id', appName, '-e', '--silent', '--accept-source-agreements', '--accept-package-agreements'], { encoding: 'utf8', shell: true });
+          return r.status === 0 ? `Done — Installed ${appName} via winget.` : `winget install error: ${r.stderr || r.stdout}`;
+        }
+        if (act === 'uninstall') {
+          if (!(await ask(`${red('🗑')} Uninstall ${cream(appName)} via winget?`))) return 'User declined uninstallation.';
+          const r = spawnSync('winget', ['uninstall', '--id', appName, '-e', '--silent'], { encoding: 'utf8', shell: true });
+          return r.status === 0 ? `Done — Uninstalled ${appName} via winget.` : `winget uninstall error: ${r.stderr || r.stdout}`;
+        }
+      }
 
       if (act === 'detect' || act === 'list') {
         const appPaths = [
@@ -676,9 +697,14 @@ async function runTool(name, a, ctx) {
 
     if (name === 'browser') {
       const act = a.action || 'open';
+      const isWin = process.platform === 'win32';
       if (act === 'open') {
         const u = a.url || 'http://localhost:3000';
-        spawnSync('osascript', ['-e', `tell application "Google Chrome" to open location "${u}"`]);
+        if (isWin) {
+          spawnSync('powershell', ['-NoProfile', '-Command', `Start-Process chrome "${u}"`], { shell: true });
+        } else {
+          spawnSync('osascript', ['-e', `tell application "Google Chrome" to open location "${u}"`]);
+        }
         return `Opened ${u} in Google Chrome.`;
       }
       if (act === 'read') {
@@ -1094,7 +1120,77 @@ function loadGlobalMemoryAndRules() {
   return PERSISTENT_SECURITY_RULES.trim();
 }
 
+
+async function runSetup() {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = q => new Promise(r => rl.question(`${q} `, r));
+
+  console.log(BANNER);
+  console.log(meadow('🌿 Welcome to Leroy Setup! Setting up local AI coding agent...\n'));
+
+  // 1. Check & create ~/.leroy directory
+  fs.mkdirSync(path.join(LEROY_DIR, 'models'), { recursive: true });
+  fs.mkdirSync(path.join(LEROY_DIR, 'repos'), { recursive: true });
+  console.log(sky('✓ Directory structure ~/.leroy ready.'));
+
+  // 2. Check llama-server
+  const srv = findLlamaServer();
+  if (srv) {
+    console.log(sky(`✓ llama.cpp installed at: ${srv}`));
+  } else {
+    console.log(red('✗ llama-server not found on PATH.'));
+    if (process.platform === 'darwin') {
+      const installBrew = await ask(`${carrot('?')} Install llama.cpp via Homebrew now? [y/N]`);
+      if (/^y/i.test(installBrew.trim())) {
+        console.log(dim('Running brew install llama.cpp...'));
+        spawnSync('brew', ['install', 'llama.cpp'], { stdio: 'inherit' });
+      }
+    } else if (process.platform === 'win32') {
+      console.log(dim('Install via winget: winget install llama.cpp, or download from github.com/ggml-org/llama.cpp/releases'));
+    }
+  }
+
+  // 3. Check models
+  const fastModelPath = MODELS.fast;
+  const strongModelPath = MODELS.strong;
+  const fastExists = fs.existsSync(fastModelPath);
+  const strongExists = fs.existsSync(strongModelPath);
+
+  console.log(`\n${earth('Model Status:')}`);
+  console.log(`  - FAST (3B Coder): ${fastExists ? meadow('INSTALLED') : red('MISSING')} (${path.basename(fastModelPath)})`);
+  console.log(`  - STRONG (7B Coder): ${strongExists ? meadow('INSTALLED') : red('MISSING')} (${path.basename(strongModelPath)})`);
+
+  if (!fastExists) {
+    const dlFast = await ask(`\n${carrot('?')} Download FAST 3B model (~1.95 GiB) now from HuggingFace? [y/N]`);
+    if (/^y/i.test(dlFast.trim())) {
+      console.log(sky('🐇 Downloading LeroyObliterated (Qwen2.5-Coder-3B Q4_K_M)...'));
+      const url = 'https://huggingface.co/bartowski/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf';
+      spawnSync('curl', ['-L', '-o', fastModelPath, url, '--progress-bar'], { stdio: 'inherit' });
+    }
+  }
+
+  if (!strongExists) {
+    const dlStrong = await ask(`\n${carrot('?')} Download STRONG 7B model (~4.36 GiB) for deep reverse engineering/architecture? [y/N]`);
+    if (/^y/i.test(dlStrong.trim())) {
+      console.log(sky('🐇 Downloading Qwen2.5-Coder-7B-Instruct-abliterated-Q4_K_M (~4.36 GiB)...'));
+      const url = 'https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-abliterated-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-abliterated-Q4_K_M.gguf';
+      spawnSync('curl', ['-L', '-o', strongModelPath, url, '--progress-bar'], { stdio: 'inherit' });
+    }
+  }
+
+  // 4. Verify RTK & Tools
+  const rtkPath = hasRtk();
+  console.log(`\n${earth('Tool Status:')}`);
+  console.log(`  - RTK Token Compression: ${rtkPath ? meadow('ACTIVE (' + rtkPath + ')') : dim('Optional (install via cargo/brew for 43% token savings)')}`);
+  console.log(`  - Git: ${spawnSync('git', ['--version']).status === 0 ? meadow('AVAILABLE') : red('NOT FOUND')}`);
+
+  console.log(`\n${meadow('🌾 Leroy setup complete! Start anytime by running: leroy')}\n`);
+  rl.close();
+  process.exit(0);
+}
+
 async function main() {
+  if (process.argv.slice(2)[0] === 'setup') return runSetup();
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
     console.log(BANNER + `\nUsage:\n  leroy <github-url | owner/repo | local-path>\n  leroy\n\nOptions:\n  --fast    Use 3B Coder model\n  --yes     Auto-approve changes\n  --ctx N   Context tokens (default: 4096)`);
