@@ -206,6 +206,12 @@ function runRea(cmd, extraArgs, cwd) {
 
 // Tool definitions with category tags for Dynamic Tool Loading
 const TOOL_DEFINITIONS = {
+  edit_file: fn('edit_file', 'Surgically find and replace an exact block of code inside a file (like Claude Code / Antigravity)', {
+    path: { type: 'string', description: 'File path relative to workspace' },
+    target: { type: 'string', description: 'Exact text block to replace' },
+    replacement: { type: 'string', description: 'New replacement text' }
+  }, ['path', 'target', 'replacement']),
+
   notion: fn('notion', 'Human-readable visual project memory in Notion (search, read, update, add_screenshot, create)', {
     action: { type: 'string', enum: ['search', 'read', 'update_section', 'add_screenshot', 'create'], description: 'Action to perform' },
     project_name: { type: 'string', description: 'Name of project or search query' },
@@ -391,7 +397,7 @@ function saveStructuredMemory(mem) {
 
 function selectActiveTools(userText, requestedCapabilities = []) {
   const selected = new Set([
-    'list_dir', 'read_file', 'search', 'write_file', 'run', 'project', 'memory', 'read_memory', 'discover_tools'
+    'list_dir', 'read_file', 'search', 'write_file', 'edit_file', 'run', 'project', 'memory', 'read_memory', 'discover_tools'
   ]);
 
   const text = (userText || '').toLowerCase();
@@ -968,6 +974,19 @@ end tell`;
       }
     }
 
+    
+    if (name === 'edit_file') {
+      const full = inside(root, a.path);
+      if (!fs.existsSync(full)) return `File "${a.path}" does not exist in "${root}".`;
+      const original = fs.readFileSync(full, 'utf8');
+      if (!original.includes(a.target)) {
+        return `edit_file error: Target string not found in ${a.path}. Make sure whitespace and line breaks match exactly.`;
+      }
+      const updated = original.replace(a.target, a.replacement);
+      fs.writeFileSync(full, updated, 'utf8');
+      return `Successfully applied surgical edit to ${a.path}.`;
+    }
+
     return `unknown tool ${name}`;
   } catch (e) {
     return `error: ${e.message}`;
@@ -1123,7 +1142,25 @@ function spinner(label) {
   return () => { clearInterval(t); process.stdout.write('\r' + ' '.repeat(label.length + 10) + '\r'); };
 }
 
+async function compactContext(messages) {
+  if (messages.length <= 14) return messages;
+  const sys = messages[0];
+  const recent = messages.slice(-8);
+  const mid = messages.slice(1, -8);
+  const summary = mid
+    .filter(m => m.role === 'tool' || (m.role === 'assistant' && m.content))
+    .map(m => m.role === 'tool' ? `[Tool Output]: ${m.content.slice(0, 100)}` : `[Assistant]: ${m.content.slice(0, 100)}`)
+    .join('\n');
+  const compacted = [
+    sys,
+    { role: 'system', content: `Prior Context Summary:\n${summary.slice(0, 800)}` },
+    ...recent
+  ];
+  return compacted;
+}
+
 async function turn(messages, ctx, opts) {
+  messages = await compactContext(messages);
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
   const isCasual = /^(hi|hello|hey|yo|sup|test|ping|how are you|who are you)[\s!.]*$/i.test(lastUserMsg.trim());
   if (!ctx.requestedCapabilities) ctx.requestedCapabilities = [];
@@ -1375,7 +1412,20 @@ async function main() {
       return prompt();
     }
     if (line === '/tree') {
-      console.log(tree(root));
+      console.log(tree(ctx.root));
+      return prompt();
+    }
+    if (line === '/compact') {
+      messages = await compactContext(messages);
+      console.log(meadow('🌾 Context compacted to free local token window.'));
+      return prompt();
+    }
+    if (line === '/model') {
+      console.log(sky(`Model: ${currentServerModel ? path.basename(currentServerModel) : 'Default'}`));
+      return prompt();
+    }
+    if (line === '/tools') {
+      console.log(earth(`Registered Tools: ${Object.keys(TOOL_DEFINITIONS).join(', ')}`));
       return prompt();
     }
 
