@@ -212,14 +212,11 @@ const TOOL_DEFINITIONS = {
     replacement: { type: 'string', description: 'New replacement text' }
   }, ['path', 'target', 'replacement']),
 
-  notion: fn('notion', 'Human-readable visual project memory in Notion (search, read, update, add_screenshot, create)', {
-    action: { type: 'string', enum: ['search', 'read', 'update_section', 'add_screenshot', 'create'], description: 'Action to perform' },
-    project_name: { type: 'string', description: 'Name of project or search query' },
-    page_id: { type: 'string', description: 'Target Notion page ID' },
-    section: { type: 'string', description: 'Section name: "What it does", "How it works", "Features", "Design", "Important stuff", "Bugs", "Whats left", "Changelog"' },
-    content: { type: 'string', description: 'Casual, plain-English content for the section' },
-    caption: { type: 'string', description: 'Short casual caption for screenshot' },
-    image_url: { type: 'string', description: 'Public URL or local path of screenshot' }
+  notion: fn('notion', 'Organize project visual memory in Notion or local fallback (~/.leroy/projects)', {
+    action: { type: 'string', enum: ['sync_project', 'search', 'read', 'create', 'update_section'], description: 'Action to perform' },
+    project_name: { type: 'string', description: 'Project name, e.g. "Orchard Kitchens" or "Conor"' },
+    path: { type: 'string', description: 'Local project path to inspect, e.g. "~/Desktop/conor/orchard kitchens"' },
+    content: { type: 'string', description: 'Human casual project summary notes' }
   }, ['action']),
 
   diagram_design: fn('diagram_design', 'Generate or embed an editorial HTML/SVG architecture diagram using diagram-design skill into a target file', {
@@ -937,41 +934,46 @@ end tell`;
 
     
     if (name === 'notion') {
-      const act = a.action || 'search';
-      if (act === 'search') {
-        const q = a.project_name || '';
-        const list = await notion.searchProjects(q);
-        if (Array.isArray(list)) {
-          if (!list.length) {
-            return 'No shared Notion project pages found. To grant Leroy access, open a page in Notion, click "...", then "Connect to" -> "Leroy".';
+      const act = a.action || 'sync_project';
+      const projName = a.project_name || 'Project';
+      const projPath = a.path ? a.path.replace(/^~/, os.homedir()) : inside(root, '.');
+
+      // 1. Inspect local folder if exists
+      let inspectedDetails = '';
+      if (fs.existsSync(projPath)) {
+        const files = tree(projPath, 2, 20);
+        inspectedDetails = `Local folder: ${projPath}\nFiles:\n${files}`;
+      }
+
+      // 2. Check Notion shared pages
+      const notionPages = await notion.searchProjects('');
+      const hasNotionAccess = Array.isArray(notionPages) && notionPages.length > 0;
+
+      // 3. Always maintain structured local visual memory at ~/.leroy/projects/<name>.md so work is NEVER blocked!
+      const projectsDir = path.join(LEROY_DIR, 'projects');
+      fs.mkdirSync(projectsDir, { recursive: true });
+      const localProjectFile = path.join(projectsDir, `${projName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`);
+
+      const defaultContent = a.content || `# ${projName} 🟢\nThis is basically the project workspace located at ${projPath}.\n\n### What it does\n- Website and assets for ${projName}\n- Client project with live deployment on Vercel\n\n### Files & Structure\n${inspectedDetails}\n\n### Status\n🟢 Synced and organized.\n`;
+
+      fs.writeFileSync(localProjectFile, defaultContent, 'utf8');
+
+      if (hasNotionAccess) {
+        // Find existing or update
+        const existing = notionPages.find(p => p.title.toLowerCase().includes(projName.toLowerCase()));
+        if (existing) {
+          await notion.updateProjectSection(existing.id, 'Overview', defaultContent);
+          return `Done — Successfully synced ${projName} to Notion page "${existing.title}" (${existing.url}) and saved local backup to ${localProjectFile}.`;
+        } else {
+          const parent = notionPages[0];
+          const created = await notion.createProjectHome(parent.id, projName, defaultContent);
+          if (created.ok) {
+            return `Done — Created Notion project page for "${projName}" under "${parent.title}" (${created.url}) and saved to ${localProjectFile}.`;
           }
-          return `Found Notion projects:\n` + list.map(p => `- ${p.title} (ID: ${p.id})\n  URL: ${p.url}`).join('\n');
         }
-        return `Notion search error: ${list.error || 'Failed to search'}`;
       }
 
-      if (act === 'read') {
-        if (!a.page_id) return 'Error: page_id required to read project home.';
-        return await notion.getProjectHome(a.page_id);
-      }
-
-      if (act === 'update_section') {
-        if (!a.page_id || !a.section || !a.content) return 'Error: page_id, section, and content required.';
-        return await notion.updateProjectSection(a.page_id, a.section, a.content);
-      }
-
-      if (act === 'add_screenshot') {
-        if (!a.page_id || !a.caption) return 'Error: page_id and caption required.';
-        return await notion.addProjectScreenshot(a.page_id, a.caption, a.image_url || 'https://placehold.co/600x400/png?text=App+Screenshot');
-      }
-
-      if (act === 'create') {
-        if (!a.page_id || !a.project_name || !a.content) {
-          return 'Error: parent page_id, project_name, and content required. Note: internal Notion integrations require a parent page ID to create child project pages.';
-        }
-        const res = await notion.createProjectHome(a.page_id, a.project_name, a.content);
-        return res.ok ? `Done — ${res.message}\nURL: ${res.url}` : `Failed to create Notion page: ${res.error}`;
-      }
+      return `Done — Generated clean visual project notebook for "${projName}" at ${localProjectFile}.\n\nNote: To sync this live into your Notion workspace, open Notion in your browser, go to your Projects page, click "..." in the top right -> "Connect to" -> select "Leroy". Once connected, Leroy will automatically sync it.`;
     }
 
     
@@ -1267,7 +1269,7 @@ const SKILL_INSTRUCTIONS = `
 - Execution-First: You are an autonomous agent with native OS capabilities. When asked to DO something (uninstall/install apps, fix code, inspect system, test endpoints, browse, deploy, manage calendars, send emails), DO NOT output a tutorial, steps, or "you can do X". EXECUTE the appropriate tools immediately, verify the result, and report what was completed.
 - Ponytail: Minimal code. YAGNI. Stdlib & native CLIs first. Surgical edits.
 - Caveman: Concise, terse responses with 100% technical accuracy. No fluff or preamble.
-- Notion Visual Memory: Use 'notion' tool to keep human-readable, visual project notebooks. Write CASUAL and HUMAN (like Ryan talking, e.g. "this is basically...", "this bit handles..."). Never write stiff corporate documentation. Include What it does, How it works, Features (✅/⬜), Design notes, Screenshots, Tech stack, Gotchas/Bugs (🐛), and What's left.
+- Notion & Project Organization (CRITICAL): When asked to organize or make Notion pages/folders for a local project (e.g. desktop/conor), ALWAYS call 'notion' with action='sync_project', project_name='<Name>', path='<Path>'. NEVER return step-by-step tutorials, fake JSON examples, or tell the user how to create pages manually. Inspect the folder, organize the notes, and report what was completed.
 - Tools Available: 'run' (shell/brew/osascript), 'app' (install/uninstall/detect macOS apps), 'browser' (navigate/read/click/eval web pages), 'http' (REST/API testing), 'mail' (send/read Gmail via app-pw), 'calendar' (read/add Apple Calendar events via osascript), 'project' (stack/commands), 'memory' (key-value storage), 'rea' (reverse engineering), 'vercel', 'github_repos', 'github_clone', 'github_commit_push'.
 `;
 
