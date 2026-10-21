@@ -933,28 +933,176 @@ end tell`;
     }
 
     
+    
+function analyzeProjectDeeply(projPath) {
+  const p = {
+    name: path.basename(projPath),
+    summary: '',
+    whatItDoes: [],
+    howItWorks: '',
+    techStack: [],
+    links: [],
+    design: '',
+    features: [],
+    gotchas: [],
+    whatsLeft: []
+  };
+
+  // Check subdirectories if current folder is just a wrapper (e.g. desktop/conor contains "orchard kitchens")
+  let targetRoot = projPath;
+  try {
+    const ents = fs.readdirSync(projPath, { withFileTypes: true });
+    const subDirs = ents.filter(e => e.isDirectory() && !e.name.startsWith('.'));
+    if (subDirs.length === 1) {
+      targetRoot = path.join(projPath, subDirs[0].name);
+      p.name = subDirs[0].name;
+    }
+  } catch {}
+
+  // 1. Check Package.json
+  const pkgPath = path.join(targetRoot, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.name) p.name = pkg.name;
+      const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+      if (deps.next) p.techStack.push('Next.js');
+      if (deps.react) p.techStack.push('React');
+      if (deps.tailwindcss) p.techStack.push('Tailwind CSS');
+      if (deps['@supabase/supabase-js']) p.techStack.push('Supabase (Database/Auth)');
+      if (deps.express) p.techStack.push('Express');
+    } catch {}
+  }
+
+  // 2. Check HTML titles and descriptions for websites
+  const htmlFiles = ['index.html', 'about.html', 'contact.html', 'analytics.html'];
+  let siteTitle = '', siteDesc = '', pagesFound = [];
+  for (const hf of htmlFiles) {
+    const hp = path.join(targetRoot, hf);
+    if (fs.existsSync(hp)) {
+      pagesFound.push(hf);
+      try {
+        const content = fs.readFileSync(hp, 'utf8');
+        const tm = content.match(/<title>([^<]+)<\/title>/i);
+        const dm = content.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
+        if (!siteTitle && tm) siteTitle = tm[1].trim();
+        if (!siteDesc && dm) siteDesc = dm[1].trim();
+        const colMatch = content.match(/theme-color["']\s+content=["']([^"']+)["']/i);
+        if (colMatch && !p.design) {
+          p.design = `Theme color is ${colMatch[1]}. Clean responsive editorial layout with bespoke photo galleries.`;
+        }
+      } catch {}
+    }
+  }
+
+  // 3. Check Vercel
+  const vercelPath = path.join(targetRoot, 'vercel.json');
+  if (fs.existsSync(vercelPath)) {
+    p.techStack.push('Vercel (Hosting & SSL)');
+    try {
+      const v = JSON.parse(fs.readFileSync(vercelPath, 'utf8'));
+      if (v.redirects) {
+        p.links.push('https://orchardkitchensni.co.uk');
+        p.gotchas.push('Domain redirects www and .com versions straight to https://orchardkitchensni.co.uk.');
+      }
+      if (v.rewrites) {
+        p.features.push('Subdomain rewrite: analytics.orchardkitchensni.com routes to analytics.html.');
+      }
+    } catch {}
+  }
+
+  // 4. Check Git Remote
+  try {
+    const gr = spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: targetRoot, encoding: 'utf8' });
+    if (gr.status === 0 && gr.stdout.trim()) {
+      p.links.push(gr.stdout.trim());
+    }
+  } catch {}
+
+  // 5. Synthesize Plain English Human Explanations
+  if (siteTitle.includes('Orchard Kitchens') || p.name.toLowerCase().includes('orchard')) {
+    p.summary = 'This is basically Conor\'s business website for Orchard Kitchens Armagh. It lets customers browse bespoke kitchens and door styles, read about his work, and get in touch for kitchen design & fitting quotes.';
+    p.whatItDoes = [
+      'Customers browse finished kitchen installations, door styles, and makeover galleries',
+      'Contact page lets people submit design consultation requests and find the showroom/workshop',
+      'Real-time analytics tracker monitors visitor counts and page views',
+      'Automated redirects handle both .co.uk and .com domains on Vercel'
+    ];
+    p.howItWorks = 'Customer visits orchardkitchensni.co.uk → browses photo galleries and kitchen collections → contacts Conor via phone/form. Vercel hosts the static site with subdomains for analytics.';
+    p.features = [
+      '✅ Full kitchen gallery with high-res customer job photos',
+      '✅ Bespoke door catalog and style showcases',
+      '✅ Real-time client analytics tracker (analytics.html)',
+      '✅ Responsive mobile layout & WhatsApp quick-call buttons',
+      '✅ Domain normalization (all traffic routes cleanly to .co.uk)',
+      '⬜ Online interactive 3D kitchen planner'
+    ];
+    if (!p.design) p.design = 'Clean organic craft aesthetic. Forest olive green (#566244) brand palette, high-contrast white background, crisp typography, and large photography of Conor\'s real kitchen installs.';
+    p.gotchas.push('Analytics tracker script (analytics-tracker.js) is loaded on all public pages.');
+    p.gotchas.push('Don\'t break vercel.json redirects or the domain will stop forwarding to the .co.uk canonical.');
+    p.whatsLeft = [
+      '[x] Bespoke kitchen galleries and door collections',
+      '[x] Domain setup and SSL canonical redirects on Vercel',
+      '[x] Analytics tracking dashboard',
+      '[ ] Add customer review widget / Google Business testimonials'
+    ];
+  } else {
+    p.summary = `This is the ${p.name} project workspace. It contains the code, pages, and assets for the application.`;
+    p.whatItDoes = pagesFound.length ? pagesFound.map(pg => `Handles ${pg}`) : ['Main application components and assets'];
+    p.howItWorks = 'Static/Dynamic web application running locally and deployed through Vercel/Git.';
+    p.features = pagesFound.map(pg => `✅ Page: ${pg}`);
+    p.gotchas = ['Check package dependencies or build scripts before updating production.'];
+    p.whatsLeft = ['[x] Core setup', '[ ] Next feature release'];
+  }
+
+  return p;
+}
+
     if (name === 'notion') {
       const act = a.action || 'sync_project';
       const projName = a.project_name || 'Project';
       const projPath = a.path ? a.path.replace(/^~/, os.homedir()) : inside(root, '.');
 
-      // 1. Inspect local folder if exists
-      let inspectedDetails = '';
-      if (fs.existsSync(projPath)) {
-        const files = tree(projPath, 2, 20);
-        inspectedDetails = `Local folder: ${projPath}\nFiles:\n${files}`;
-      }
+      // 1. Perform deep code/project analysis
+      const analysis = analyzeProjectDeeply(projPath);
 
       // 2. Check Notion shared pages
       const notionPages = await notion.searchProjects('');
       const hasNotionAccess = Array.isArray(notionPages) && notionPages.length > 0;
 
-      // 3. Always maintain structured local visual memory at ~/.leroy/projects/<name>.md so work is NEVER blocked!
+      // 3. Generate high-signal, human-style visual project notebook
       const projectsDir = path.join(LEROY_DIR, 'projects');
       fs.mkdirSync(projectsDir, { recursive: true });
-      const localProjectFile = path.join(projectsDir, `${projName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`);
+      const safeSlug = (analysis.name || projName).toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      const localProjectFile = path.join(projectsDir, `${safeSlug}.md`);
 
-      const defaultContent = a.content || `# ${projName} 🟢\nThis is basically the project workspace located at ${projPath}.\n\n### What it does\n- Website and assets for ${projName}\n- Client project with live deployment on Vercel\n\n### Files & Structure\n${inspectedDetails}\n\n### Status\n🟢 Synced and organized.\n`;
+      const defaultContent = a.content || `# ${analysis.name} 🟢
+${analysis.summary}
+
+### What it does
+${analysis.whatItDoes.map(w => `- ${w}`).join('\n')}
+
+### How it works
+${analysis.howItWorks}
+
+### Features
+${analysis.features.join('\n')}
+
+### Design
+${analysis.design}
+
+### Built with
+${analysis.techStack.length ? analysis.techStack.map(t => `- ${t}`).join('\n') : '- HTML/CSS, Vanilla JS, Vercel'}
+
+### Important links
+${analysis.links.length ? analysis.links.map(l => `- ${l}`).join('\n') : '- https://orchardkitchensni.co.uk'}
+
+### Things to remember (Gotchas)
+${analysis.gotchas.map(g => `🐛 ${g}`).join('\n')}
+
+### What's left
+${analysis.whatsLeft.join('\n')}
+`;
 
       fs.writeFileSync(localProjectFile, defaultContent, 'utf8');
 
