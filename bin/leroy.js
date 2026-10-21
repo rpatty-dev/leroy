@@ -36,6 +36,7 @@ const REPOS = path.join(os.homedir(), '.leroy', 'repos');
 const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'target', '__pycache__', '.venv', 'vendor']);
 
 // Terminal ANSI colors - Meadow & Twilight theme
+const stripAnsi = s => (s || '').replace(/\x1b\[[0-9;]*m/g, '');
 const c = (rgb, s) => `\x1b[38;2;${rgb}m${s}\x1b[0m`;
 const meadow = s => c('134;239;172', s);  // clover green (#86efac)
 const flower = s => c('244;114;182', s);  // wildflower pink (#f472b6)
@@ -46,6 +47,31 @@ const cream = s => c('245;245;244', s);   // warm cream (#f5f5f4)
 const earth = s => c('168;162;158', s);   // loam / stone (#a8a29e)
 const dim = s => c('120;113;108', s);     // soft soil (#78716c)
 const red = s => c('252;165;165', s);     // berry red (#fca5a5)
+
+
+function renderAppFrame(statusText = 'Ready', meadowPath = process.cwd()) {
+  const width = Math.min(process.stdout.columns || 80, 100);
+  const lines = [];
+
+  const title = ` ${cream('🐇 L E R O Y')} ${dim('v2.0')} `;
+  const badges = ` ${meadow('● Metal GPU 40 t/s')}  ${sky('● Qwen-3B')}  ${dim('● RTK')} `;
+  const padTop = Math.max(0, width - stripAnsi(title).length - stripAnsi(badges).length - 2);
+  lines.push(c('100;116;139', '╭' + '─'.repeat(width - 2) + '╮'));
+  lines.push(c('100;116;139', '│') + title + ' '.repeat(padTop) + badges + c('100;116;139', '│'));
+  lines.push(c('100;116;139', '├' + '─'.repeat(width - 2) + '┤'));
+
+  const ws = `  ${meadow('● Meadow:')} ${cream(path.basename(meadowPath))} ${dim('(' + meadowPath + ')')}`;
+  lines.push(c('100;116;139', '│') + ws + ' '.repeat(Math.max(0, width - stripAnsi(ws).length - 2)) + c('100;116;139', '│'));
+
+  lines.push(c('100;116;139', '├' + '─'.repeat(width - 2) + '┤'));
+  const stLeft = ` ${sky('BUILD')} ${c('100;116;139', '│')} ${dim('Status:')} ${cream(statusText)} `;
+  const stRight = ` ${dim('Commands: /')} ${c('100;116;139', '│')} ${carrot('Tab autocompletes')} `;
+  const padSt = Math.max(0, width - stripAnsi(stLeft).length - stripAnsi(stRight).length - 2);
+  lines.push(c('100;116;139', '│') + stLeft + ' '.repeat(padSt) + stRight + c('100;116;139', '│'));
+  lines.push(c('100;116;139', '╰' + '─'.repeat(width - 2) + '╯'));
+
+  return lines.join('\n');
+}
 
 const BANNER = `
 ${c('100;116;139', '╭──────────────────────────────────────────────────────────────╮')}
@@ -1566,7 +1592,7 @@ async function main() {
     return;
   }
   const root = resolveRoot(opts.target);
-  console.log(renderAppFrame('Connecting to Metal GPU server...', '', ''));
+  console.log(renderAppFrame('Ready', root));
   await ensureServer(opts);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, completer: slashCompleter });
