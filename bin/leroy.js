@@ -172,11 +172,15 @@ function runRea(cmd, extraArgs, cwd) {
 }
 
 const TOOLS = [
-  fn('list_dir', 'List files in a directory (token-compacted with tree/rtk)', { path: { type: 'string' } }),
+  fn('list_dir', 'List files in a local directory (token-compacted with tree/rtk). Note: for remote GitHub repositories, use github_repos instead.', { path: { type: 'string' } }),
   fn('read_file', 'Read a targeted range of a file with line numbers', { path: { type: 'string' }, start_line: { type: 'integer' }, end_line: { type: 'integer' } }, ['path']),
   fn('search', 'Search text or regex pattern across codebase (strips noise)', { pattern: { type: 'string' }, path: { type: 'string' } }, ['pattern']),
   fn('write_file', 'Create or overwrite a file surgically', { path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
   fn('run', 'Execute shell command with RTK token-compression', { command: { type: 'string' } }, ['command']),
+  fn('github_repos', 'List or inspect GitHub repositories for the authenticated user or an organization (uses gh CLI / RTK)', {
+    owner: { type: 'string', description: 'GitHub username or org (optional; defaults to the authenticated gh user)' },
+    limit: { type: 'integer', description: 'Max repositories to return (default: 15)' }
+  }),
   fn('rea', 'Execute REA (Reverse Engineer Anything) tool against a native binary, electron/js app, or directory', {
     command: { type: 'string', enum: REA_SAFE },
     args: { type: 'string', description: 'Arguments like file path or options' }
@@ -252,6 +256,25 @@ async function runTool(name, a, ctx) {
       }
       const r = spawnSync(cmdToRun, { cwd: root, shell: true, encoding: 'utf8', timeout: 60000 });
       return cap(`exit ${r.status}\n${r.stdout || ''}${r.stderr || ''}`);
+    }
+
+    if (name === 'github_repos') {
+      const owner = a.owner ? String(a.owner).trim() : '';
+      const limit = String(Math.min(a.limit || 15, 30));
+      console.log(sky(`  🐰 Checking GitHub repositories ${owner ? `for ${owner}` : '(authenticated user)'}…`));
+      
+      const ghArgs = ['repo', 'list'];
+      if (owner) ghArgs.push(owner);
+      ghArgs.push('--limit', limit);
+
+      if (rtkBin) {
+        const r = spawnSync(rtkBin, ['gh', ...ghArgs], { encoding: 'utf8', timeout: 15000 });
+        if (r.status === 0 && r.stdout.trim()) return cap(r.stdout.trim(), 2000);
+      }
+      const r = spawnSync('gh', ghArgs, { encoding: 'utf8', timeout: 15000 });
+      if (r.error) return `gh CLI not available: ${r.error.message}`;
+      if (r.status !== 0) return cap(`gh error: ${(r.stderr || r.stdout || '').trim()}`, 1000);
+      return cap(r.stdout.trim() || 'No repositories found.', 2000);
     }
 
     if (name === 'rea') {
@@ -410,8 +433,17 @@ async function turn(messages, ctx, opts) {
     let started = false, res;
     try {
       res = await completion(messages, activeTools, t => {
-        if (!started) { started = true; stop(); process.stdout.write(sky('🐇 ')); }
-        process.stdout.write(t);
+        // If this looks like the start of a raw JSON tool call, don't stream it to user terminal
+        if (!started) {
+          started = true;
+          stop();
+          if (!t.trim().startsWith('{') && !t.trim().startsWith('```')) {
+            process.stdout.write(sky('🐇 '));
+            process.stdout.write(t);
+          }
+        } else {
+          process.stdout.write(t);
+        }
       });
     } catch (e) {
       stop();
@@ -419,12 +451,18 @@ async function turn(messages, ctx, opts) {
       return;
     }
     if (!started) stop();
-    if (res.text) console.log();
 
     // Filter hallucinated tools that do not exist in TOOLS
     const validCalls = (res.calls || []).filter(c => TOOLS.some(t => t.function.name === c.name));
 
-    const msg = { role: 'assistant', content: res.text || '' };
+    // If tool calls were extracted from jsonMatch, don't echo the raw json as assistant text
+    let assistantText = res.text || '';
+    if (validCalls.length && assistantText.includes(validCalls[0].name)) {
+      assistantText = '';
+    }
+    if (assistantText) console.log();
+
+    const msg = { role: 'assistant', content: assistantText };
     if (validCalls.length) {
       msg.tool_calls = validCalls.map((c, i) => ({
         id: c.id || `call_${step}_${i}`,
@@ -450,6 +488,7 @@ const SKILL_INSTRUCTIONS = `
 # LEROY CORE SKILLS
 - Ponytail: Minimal code. YAGNI. Reuse existing patterns. Stdlib first. Surgical changes.
 - Caveman: Concise, fluff-free responses with exact technical accuracy.
+- Tool Usage: Call 'github_repos' to list/search GitHub repos, 'list_dir' for local directory contents, 'read_file' for code, 'run' for shell commands, 'rea' for binary analysis, 'read_memory' for credentials/keys.
 - REA: Use 'rea' tool to analyze binaries, Mach-O/PE/ELF executables, and web bundles.
 - Taste: Calm visual hierarchy, dark palette, intentional layout.
 `;
