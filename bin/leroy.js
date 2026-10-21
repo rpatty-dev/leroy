@@ -1138,8 +1138,13 @@ async function completion(messages, tools, onText) {
 function spinner(label) {
   const frames = ['🌾', '🐇', '🥕', '🌸', '🐰', '🌼'];
   let i = 0;
-  const t = setInterval(() => process.stdout.write(`\r${dim(frames[i++ % frames.length] + ' ' + label)}   `), 250);
-  return () => { clearInterval(t); process.stdout.write('\r' + ' '.repeat(label.length + 10) + '\r'); };
+  let currentLabel = label;
+  const t = setInterval(() => {
+    process.stdout.write(`\r${dim(frames[i++ % frames.length] + ' ' + currentLabel)}   `);
+  }, 180);
+  const updater = (newText) => { currentLabel = newText; };
+  updater.stop = () => { clearInterval(t); process.stdout.write('\r' + ' '.repeat(Math.max(currentLabel.length, 40) + 10) + '\r'); };
+  return updater;
 }
 
 async function compactContext(messages) {
@@ -1167,7 +1172,8 @@ async function turn(messages, ctx, opts) {
   const activeTools = isCasual ? [] : selectActiveTools(lastUserMsg, ctx.requestedCapabilities);
 
   for (let step = 0; step < 8; step++) {
-    const stop = spinner(step ? 'nibbling clover…' : 'resting in the meadow…');
+    const spin = spinner(step === 0 ? 'thinking & analyzing request…' : 'evaluating tool results…');
+    const stop = spin.stop;
     let started = false, res;
     let streamedTokens = '';
     let isSuppressedToolJson = false;
@@ -1244,8 +1250,10 @@ async function turn(messages, ctx, opts) {
 
     for (const tc of msg.tool_calls) {
       let args = {}; try { args = JSON.parse(tc.function.arguments || '{}'); } catch {}
+      spin(`running ${tc.function.name}...`);
       console.log(dim(`  🥕 ${tc.function.name}(${Object.values(args).map(v => String(v).slice(0, 40)).join(', ')})`));
       const out = await runTool(tc.function.name, args, ctx);
+      spin('processing output...');
       messages.push({ role: 'tool', tool_call_id: tc.id, content: out });
     }
   }
@@ -1308,7 +1316,29 @@ function loadGlobalMemoryAndRules() {
 
 
 async function runSetup() {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const COMMANDS = [
+    { cmd: '/tree', desc: 'Show visual project tree' },
+    { cmd: '/compact', desc: 'Compact prior context to save token window' },
+    { cmd: '/model', desc: 'Display active model & switch status' },
+    { cmd: '/tools', desc: 'List active and available tools' },
+    { cmd: '/notion', desc: 'Inspect Notion project visual memory' },
+    { cmd: '/clear', desc: 'Refresh context and start a clean session' },
+    { cmd: '/exit', desc: 'Hop out of the meadow' }
+  ];
+
+  function completer(line) {
+    if (line.startsWith('/')) {
+      const hits = COMMANDS.filter(c => c.cmd.startsWith(line));
+      if (line === '/') {
+        console.log('\n' + meadow('🌾 Available Commands:'));
+        COMMANDS.forEach(c => console.log(`  ${carrot(c.cmd.padEnd(10))} ${dim(c.desc)}`));
+      }
+      return [hits.map(c => c.cmd), line];
+    }
+    return [[], line];
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, completer });
   const ask = q => new Promise(r => rl.question(`${q} `, r));
 
   console.log(BANNER);
@@ -1426,6 +1456,17 @@ async function main() {
     }
     if (line === '/tools') {
       console.log(earth(`Registered Tools: ${Object.keys(TOOL_DEFINITIONS).join(', ')}`));
+      return prompt();
+    }
+    if (line === '/notion') {
+      console.log(sky('🐇 Querying Notion visual memory...'));
+      const nList = await notion.searchProjects('');
+      if (Array.isArray(nList) && nList.length) {
+        console.log(meadow('Notion Projects:'));
+        nList.forEach(p => console.log(`  - ${p.title} (${p.url})`));
+      } else {
+        console.log(dim('No connected Notion projects found yet. Open Notion -> ... -> Connect to -> Leroy.'));
+      }
       return prompt();
     }
 
