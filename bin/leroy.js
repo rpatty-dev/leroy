@@ -10,7 +10,7 @@ const readline = require('readline');
 const { spawn, spawnSync } = require('child_process');
 
 const PORT = 8080;
-const API = `http://127.0.0.1:${PORT}/v1`;
+let API = process.env.LEROY_API || `http://127.0.0.1:${PORT}/v1`;
 const LEROY_DIR = path.join(os.homedir(), '.leroy');
 const LEGACY_LLM = path.join(os.homedir(), 'Documents', 'LocalLLM');
 
@@ -49,12 +49,14 @@ const dim = s => c('120;113;108', s);     // soft soil (#78716c)
 const red = s => c('252;165;165', s);     // berry red (#fca5a5)
 
 
-function renderAppFrame(statusText = 'Ready', meadowPath = process.cwd()) {
+function renderAppFrame(statusText = 'Ready', meadowPath = process.cwd(), remote = null) {
   const width = Math.min(process.stdout.columns || 80, 100);
   const lines = [];
 
   const title = ` ${cream('🐇 L E R O Y')} ${dim('v2.0')} `;
-  const badges = ` ${meadow('● Metal GPU 40 t/s')}  ${sky('● Qwen-3B')}  ${dim('● RTK')} `;
+  const badges = remote
+    ? ` ${meadow('● Remote Mac GPU (40 t/s)')}  ${dim('● RTK')} `
+    : ` ${meadow('● Metal GPU 40 t/s')}  ${sky('● Qwen-3B')}  ${dim('● RTK')} `;
   const padTop = Math.max(0, width - stripAnsi(title).length - stripAnsi(badges).length - 2);
   lines.push(c('100;116;139', '╭' + '─'.repeat(width - 2) + '╮'));
   lines.push(c('100;116;139', '│') + title + ' '.repeat(padTop) + badges + c('100;116;139', '│'));
@@ -65,7 +67,9 @@ function renderAppFrame(statusText = 'Ready', meadowPath = process.cwd()) {
 
   lines.push(c('100;116;139', '├' + '─'.repeat(width - 2) + '┤'));
   const stLeft = ` ${sky('BUILD')} ${c('100;116;139', '│')} ${dim('Status:')} ${cream(statusText)} `;
-  const stRight = ` ${dim('Commands: /')} ${c('100;116;139', '│')} ${carrot('Tab autocompletes')} `;
+  const stRight = remote
+    ? ` ${dim('Engine:')} ${sky(remote.replace(/\/v1$/, ''))} `
+    : ` ${dim('Commands: /')} ${c('100;116;139', '│')} ${carrot('Tab autocompletes')} `;
   const padSt = Math.max(0, width - stripAnsi(stLeft).length - stripAnsi(stRight).length - 2);
   lines.push(c('100;116;139', '│') + stLeft + ' '.repeat(padSt) + stRight + c('100;116;139', '│'));
   lines.push(c('100;116;139', '╰' + '─'.repeat(width - 2) + '╯'));
@@ -82,13 +86,15 @@ ${c('100;116;139', '╰───────────────────
 `;
 
 function parseArgs(argv) {
-  const o = { target: null, fast: false, strong: false, yes: false, ctx: 4096 };
+  const o = { target: null, fast: false, strong: false, yes: false, ctx: 4096, remote: process.env.LEROY_API || null, serve: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--fast') o.fast = true;
     else if (a === '--strong') o.strong = true;
     else if (a === '--yes' || a === '-y') o.yes = true;
     else if (a === '--ctx') o.ctx = parseInt(argv[++i], 10) || 4096;
+    else if (a === '--remote' || a === '-r') o.remote = argv[++i];
+    else if (a === '--serve' || a === '-s') o.serve = true;
     else if (a === '-h' || a === '--help') o.help = true;
     else if (!o.target) o.target = a;
   }
@@ -1168,9 +1174,11 @@ ${analysis.whatsLeft.join('\n')}
   }
 }
 
-async function serverUp() {
+async function serverUp(customApi = null) {
   try {
-    const res = await fetch(`http://127.0.0.1:${PORT}/v1/models`, { signal: AbortSignal.timeout(1200) });
+    const target = customApi || API;
+    const url = target.endsWith('/v1') ? `${target}/models` : `${target}/v1/models`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(1500) });
     return res.ok;
   } catch {
     return false;
@@ -1197,6 +1205,11 @@ function findLlamaServer() {
 
 let currentServerModel = null;
 async function ensureServer(opts, modelType = null) {
+  if (opts.remote) {
+    if (await serverUp(opts.remote)) return;
+    die(`Could not connect to remote Leroy AI server at: ${opts.remote}\nEnsure your Mac has llama-server running.`);
+  }
+
   const chosen = modelType === 'strong' || opts.strong ? MODELS.strong : (modelType === 'fast' || opts.fast ? MODELS.fast : MODELS.main);
   if (await serverUp() && currentServerModel === chosen) return;
 
@@ -1217,13 +1230,14 @@ async function ensureServer(opts, modelType = null) {
   const isMacArm = process.platform === 'darwin' && (process.arch === 'arm64' || os.cpus()[0]?.model?.includes('Apple'));
   console.log(dim(`🥕 Waking up ${path.basename(chosen, '.gguf')} in the clover (ctx: ${opts.ctx}, ${isMacArm ? 'Metal GPU accelerated' : 'CPU optimized'})...`));
 
+  const host = opts.serve ? '0.0.0.0' : '127.0.0.1';
   const args = [
     '-m', chosen,
     '--alias', 'LeroyObliterated',
     '-c', String(opts.ctx),
     '-b', '512',
     '-ub', '256',
-    '--host', '127.0.0.1',
+    '--host', host,
     '--port', String(PORT),
     '--reasoning-budget', '0'
   ];
@@ -1240,6 +1254,19 @@ async function ensureServer(opts, modelType = null) {
   for (let i = 0; i < 40; i++) {
     if (await serverUp()) {
       currentServerModel = chosen;
+      if (opts.serve) {
+        const netInterfaces = os.networkInterfaces();
+        let lanIp = 'localhost';
+        for (const k of Object.keys(netInterfaces)) {
+          for (const addr of netInterfaces[k] || []) {
+            if (addr.family === 'IPv4' && !addr.internal) {
+              lanIp = addr.address;
+              break;
+            }
+          }
+        }
+        console.log(meadow(`🌾 Remote server listening on 0.0.0.0:${PORT}!\n   On your Work PC run: leroy --remote http://${lanIp}:${PORT}`));
+      }
       return;
     }
     await new Promise(r => setTimeout(r, 1000));
@@ -1588,11 +1615,15 @@ async function main() {
   if (process.argv.slice(2)[0] === 'setup') return runSetup();
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
-    console.log(BANNER + `\nUsage:\n  leroy <github-url | owner/repo | local-path>\n  leroy\n\nOptions:\n  --fast    Use 3B Coder model\n  --yes     Auto-approve changes\n  --ctx N   Context tokens (default: 4096)`);
+    console.log(BANNER + `\nUsage:\n  leroy <github-url | owner/repo | local-path>\n  leroy\n\nOptions:\n  --fast         Use 3B Coder model\n  --yes          Auto-approve changes\n  --remote <URL> Connect to remote Mac GPU engine (e.g. http://192.168.1.50:8080)\n  --serve        Host Mac GPU engine for other machines on LAN/Tailscale\n  --ctx N        Context tokens (default: 4096)`);
     return;
   }
+  if (opts.remote) {
+    API = opts.remote.replace(/\/+$/, '');
+    if (!API.endsWith('/v1')) API += '/v1';
+  }
   const root = resolveRoot(opts.target);
-  console.log(renderAppFrame('Ready', root));
+  console.log(renderAppFrame('Ready', root, opts.remote));
   await ensureServer(opts);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, completer: slashCompleter });
