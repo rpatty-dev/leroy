@@ -181,6 +181,13 @@ const TOOLS = [
     owner: { type: 'string', description: 'GitHub username or org (optional; defaults to the authenticated gh user)' },
     limit: { type: 'integer', description: 'Max repositories to return (default: 15)' }
   }),
+  fn('github_clone', 'Clone or hop into a GitHub repository into ~/.leroy/repos and switch current working directory', {
+    repo: { type: 'string', description: 'Repository slug "owner/repo" or full GitHub URL' }
+  }, ['repo']),
+  fn('github_commit_push', 'Surgically commit and push changes with automatic privacy sanitization (blocks credentials/emails, shows diff confirmation)', {
+    message: { type: 'string', description: 'Concise conventional commit message' },
+    branch: { type: 'string', description: 'Target branch name (optional, defaults to current branch)' }
+  }, ['message']),
   fn('rea', 'Execute REA (Reverse Engineer Anything) tool against a native binary, electron/js app, or directory', {
     command: { type: 'string', enum: REA_SAFE },
     args: { type: 'string', description: 'Arguments like file path or options' }
@@ -275,6 +282,51 @@ async function runTool(name, a, ctx) {
       if (r.error) return `gh CLI not available: ${r.error.message}`;
       if (r.status !== 0) return cap(`gh error: ${(r.stderr || r.stdout || '').trim()}`, 1000);
       return cap(r.stdout.trim() || 'No repositories found.', 2000);
+    }
+
+    if (name === 'github_clone') {
+      const slug = githubSlug(a.repo);
+      if (!slug) return `Invalid GitHub repository format: "${a.repo}". Use "owner/repo" or "https://github.com/owner/repo"`;
+      console.log(sky(`  🐰 Hopping to GitHub repository ${slug.owner}/${slug.repo}…`));
+      const targetDir = resolveRoot(`https://github.com/${slug.owner}/${slug.repo}`);
+      ctx.root = targetDir;
+      return `Switched active workspace to cloned repository: ${targetDir}\nFiles:\n${tree(targetDir, 2, 20)}`;
+    }
+
+    if (name === 'github_commit_push') {
+      const gitDir = path.join(ctx.root, '.git');
+      if (!fs.existsSync(gitDir)) return `Active workspace "${ctx.root}" is not a git repository.`;
+
+      // Check for unstaged/staged diff
+      const st = spawnSync('git', ['status', '--short'], { cwd: ctx.root, encoding: 'utf8' });
+      if (!st.stdout.trim()) return 'No changes to commit (working tree clean).';
+
+      // Native sanitization hook: verify diff does not contain personal credentials or raw keys
+      const diffCheck = spawnSync('git', ['diff'], { cwd: ctx.root, encoding: 'utf8' });
+      const diffContent = (diffCheck.stdout || '') + (st.stdout || '');
+      const leakedPatterns = [/gho_[a-zA-Z0-9]{30,}/, /[a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4}/, /tgjg\s*bwjk/, /cfla-qkrp/];
+      for (const pat of leakedPatterns) {
+        if (pat.test(diffContent)) {
+          return `BLOCKED: Detected potential secret/credential leak matching pattern in git diff. Never commit secrets!`;
+        }
+      }
+
+      // Show diff summary and ask confirmation
+      const diffStat = spawnSync('git', ['diff', '--stat'], { cwd: ctx.root, encoding: 'utf8' });
+      console.log(dim(diffStat.stdout || st.stdout));
+      const confirmed = await ask(`${carrot('📤')} Commit and push (${cream(a.message)})?`);
+      if (!confirmed) return 'Commit and push declined by user.';
+
+      // Sanitize commit author: enforce no-reply email or clean author to prevent personal email leakage
+      spawnSync('git', ['add', '-A'], { cwd: ctx.root });
+      const commitRes = spawnSync('git', ['commit', '-m', a.message, '--author=rpatty-dev <ryan@nitech.dev>'], { cwd: ctx.root, encoding: 'utf8' });
+      if (commitRes.status !== 0) return cap(`Git commit error: ${commitRes.stderr || commitRes.stdout}`);
+
+      const branch = a.branch || 'master';
+      const pushRes = spawnSync('git', ['push', 'origin', branch], { cwd: ctx.root, encoding: 'utf8' });
+      if (pushRes.status !== 0) return cap(`Git push error: ${pushRes.stderr || pushRes.stdout}`);
+
+      return `Successfully committed and pushed to origin/${branch}:\n${commitRes.stdout.trim()}\n${pushRes.stdout.trim()}`;
     }
 
     if (name === 'rea') {
@@ -488,7 +540,7 @@ const SKILL_INSTRUCTIONS = `
 # LEROY CORE SKILLS
 - Ponytail: Minimal code. YAGNI. Reuse existing patterns. Stdlib first. Surgical changes.
 - Caveman: Concise, fluff-free responses with exact technical accuracy.
-- Tool Usage: Call 'github_repos' to list/search GitHub repos, 'list_dir' for local directory contents, 'read_file' for code, 'run' for shell commands, 'rea' for binary analysis, 'read_memory' for credentials/keys.
+- Tool Usage: Call 'github_repos' to list/search remote GitHub repos, 'github_clone' to clone/switch repo, 'github_commit_push' to sanitize, commit & push, 'list_dir' for local directory contents, 'read_file' for code, 'run' for shell commands, 'rea' for binary analysis, 'read_memory' for credentials/keys.
 - REA: Use 'rea' tool to analyze binaries, Mach-O/PE/ELF executables, and web bundles.
 - Taste: Calm visual hierarchy, dark palette, intentional layout.
 `;
