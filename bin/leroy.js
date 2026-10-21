@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const notion = require('../lib/notion.js');
 const readline = require('readline');
 const { spawn, spawnSync } = require('child_process');
 
@@ -205,6 +206,16 @@ function runRea(cmd, extraArgs, cwd) {
 
 // Tool definitions with category tags for Dynamic Tool Loading
 const TOOL_DEFINITIONS = {
+  notion: fn('notion', 'Human-readable visual project memory in Notion (search, read, update, add_screenshot, create)', {
+    action: { type: 'string', enum: ['search', 'read', 'update_section', 'add_screenshot', 'create'], description: 'Action to perform' },
+    project_name: { type: 'string', description: 'Name of project or search query' },
+    page_id: { type: 'string', description: 'Target Notion page ID' },
+    section: { type: 'string', description: 'Section name: "What it does", "How it works", "Features", "Design", "Important stuff", "Bugs", "Whats left", "Changelog"' },
+    content: { type: 'string', description: 'Casual, plain-English content for the section' },
+    caption: { type: 'string', description: 'Short casual caption for screenshot' },
+    image_url: { type: 'string', description: 'Public URL or local path of screenshot' }
+  }, ['action']),
+
   diagram_design: fn('diagram_design', 'Generate or embed an editorial HTML/SVG architecture diagram using diagram-design skill into a target file', {
     target_file: { type: 'string', description: 'File to update, e.g. README.md' },
     diagram_type: { type: 'string', description: 'architecture, flowchart, process, or layer_stack' },
@@ -415,6 +426,11 @@ function selectActiveTools(userText, requestedCapabilities = []) {
     selected.add('github_repos');
     selected.add('github_clone');
     selected.add('github_commit_push');
+  }
+
+  // Notion visual memory intent
+  if (/\b(notion|notes|project home|organis|organiz|visual memory|summary page|docs)\b/.test(text) || requestedCapabilities.includes('notion')) {
+    selected.add('notion');
   }
 
   // Vercel intent
@@ -913,6 +929,45 @@ end tell`;
       return `Successfully embedded diagram into ${path.basename(target)}`;
     }
 
+    
+    if (name === 'notion') {
+      const act = a.action || 'search';
+      if (act === 'search') {
+        const q = a.project_name || '';
+        const list = await notion.searchProjects(q);
+        if (Array.isArray(list)) {
+          if (!list.length) {
+            return 'No shared Notion project pages found. To grant Leroy access, open a page in Notion, click "...", then "Connect to" -> "Leroy".';
+          }
+          return `Found Notion projects:\n` + list.map(p => `- ${p.title} (ID: ${p.id})\n  URL: ${p.url}`).join('\n');
+        }
+        return `Notion search error: ${list.error || 'Failed to search'}`;
+      }
+
+      if (act === 'read') {
+        if (!a.page_id) return 'Error: page_id required to read project home.';
+        return await notion.getProjectHome(a.page_id);
+      }
+
+      if (act === 'update_section') {
+        if (!a.page_id || !a.section || !a.content) return 'Error: page_id, section, and content required.';
+        return await notion.updateProjectSection(a.page_id, a.section, a.content);
+      }
+
+      if (act === 'add_screenshot') {
+        if (!a.page_id || !a.caption) return 'Error: page_id and caption required.';
+        return await notion.addProjectScreenshot(a.page_id, a.caption, a.image_url || 'https://placehold.co/600x400/png?text=App+Screenshot');
+      }
+
+      if (act === 'create') {
+        if (!a.page_id || !a.project_name || !a.content) {
+          return 'Error: parent page_id, project_name, and content required. Note: internal Notion integrations require a parent page ID to create child project pages.';
+        }
+        const res = await notion.createProjectHome(a.page_id, a.project_name, a.content);
+        return res.ok ? `Done — ${res.message}\nURL: ${res.url}` : `Failed to create Notion page: ${res.error}`;
+      }
+    }
+
     return `unknown tool ${name}`;
   } catch (e) {
     return `error: ${e.message}`;
@@ -1167,6 +1222,7 @@ const SKILL_INSTRUCTIONS = `
 - Execution-First: You are an autonomous agent with native OS capabilities. When asked to DO something (uninstall/install apps, fix code, inspect system, test endpoints, browse, deploy, manage calendars, send emails), DO NOT output a tutorial, steps, or "you can do X". EXECUTE the appropriate tools immediately, verify the result, and report what was completed.
 - Ponytail: Minimal code. YAGNI. Stdlib & native CLIs first. Surgical edits.
 - Caveman: Concise, terse responses with 100% technical accuracy. No fluff or preamble.
+- Notion Visual Memory: Use 'notion' tool to keep human-readable, visual project notebooks. Write CASUAL and HUMAN (like Ryan talking, e.g. "this is basically...", "this bit handles..."). Never write stiff corporate documentation. Include What it does, How it works, Features (✅/⬜), Design notes, Screenshots, Tech stack, Gotchas/Bugs (🐛), and What's left.
 - Tools Available: 'run' (shell/brew/osascript), 'app' (install/uninstall/detect macOS apps), 'browser' (navigate/read/click/eval web pages), 'http' (REST/API testing), 'mail' (send/read Gmail via app-pw), 'calendar' (read/add Apple Calendar events via osascript), 'project' (stack/commands), 'memory' (key-value storage), 'rea' (reverse engineering), 'vercel', 'github_repos', 'github_clone', 'github_commit_push'.
 `;
 
